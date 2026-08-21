@@ -1,0 +1,78 @@
+{
+ "actions": [],
+ "creation": "2026-08-20 17:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enable_ai_fallback",
+  "provider_section",
+  "groq_api_key",
+  "groq_model",
+  "column_break_1",
+  "help_text"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "description": "When off, the Ask HR chatbot only ever uses the free, local, no-AI matching (exact keywords + typo-tolerant fuzzy match) - unrecognised questions get the fixed \"here's what I can answer\" list. When on, anything neither of those resolve is sent to Groq's free API - ONLY the question text, never any employee/HR data - purely to classify which known intent it maps to. Your own code still does the actual data lookup and writes the reply either way.",
+   "fieldname": "enable_ai_fallback",
+   "fieldtype": "Check",
+   "label": "Enable AI Fallback for Unmatched Questions"
+  },
+  {
+   "depends_on": "enable_ai_fallback",
+   "fieldname": "provider_section",
+   "fieldtype": "Section Break",
+   "label": "Groq (free tier)"
+  },
+  {
+   "depends_on": "enable_ai_fallback",
+   "description": "Get a free key at https://console.groq.com/keys - no credit card required. Stored encrypted, never written to any file in the codebase.",
+   "fieldname": "groq_api_key",
+   "fieldtype": "Password",
+   "label": "Groq API Key"
+  },
+  {
+   "default": "openai/gpt-oss-20b",
+   "depends_on": "enable_ai_fallback",
+   "description": "Must be a model actually available on your Groq account (check console.groq.com/playground) - Groq's free-tier catalog changes over time, so don't trust an old blog post's model name. Confirmed working here as of Aug 2026.",
+   "fieldname": "groq_model",
+   "fieldtype": "Data",
+   "label": "Groq Model"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "enable_ai_fallback",
+   "fieldname": "help_text",
+   "fieldtype": "HTML",
+   "options": "<p class='text-muted' style='font-size: 12px;'>Actual live limit for this key, read from Groq's own response headers: 1,000 requests / 8,000 tokens per rate-limit window. Plenty for internal HR chatbot use - this is only called for questions the free local matching can't already resolve.</p>"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-20 17:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arjun Chatbot",
+ "name": "HR Chatbot Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "quick_entry": 1,
+ "sort_field": "modified",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

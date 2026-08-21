@@ -8,7 +8,10 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# required_apps = []
+# Needs hrms for Employee/Leave Application/Attendance/Salary Slip and
+# hrms's own get_leave_details() helper - not olscpl_hrms specifically,
+# this was only ever living there because that's where it was first built.
+required_apps = ["hrms"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -25,8 +28,8 @@ app_license = "mit"
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/arjun_chatbot/css/arjun_chatbot.css"
-# app_include_js = "/assets/arjun_chatbot/js/arjun_chatbot.js"
+app_include_css = "/assets/arjun_chatbot/css/hr_chatbot.css"
+app_include_js = "/assets/arjun_chatbot/js/hr_chatbot.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/arjun_chatbot/css/arjun_chatbot.css"
