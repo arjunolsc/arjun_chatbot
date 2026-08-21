@@ -247,6 +247,17 @@ def ask(message: str) -> dict:
 
 
 # ---- data lookups (need a linked Employee record) ----
+#
+# This covers essentially every field on Employee an employee would
+# reasonably ask about their own record - profile, contact/emergency
+# details, approvers, shift, bank, statutory IDs, salary breakup,
+# education/work history, passport, personal/health details. One field
+# is deliberately left out: custom_remarks (HR-internal notes about the
+# employee) - that's HR's own working note, not something to hand back
+# through self-service chat. Exit-only fields (relieving date, reason
+# for leaving, exit feedback...) are also left out for now since they
+# only apply to employees who've already left, not the active-employee
+# case this is built for.
 
 _MONTH_NAMES = {
 	"jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
@@ -613,6 +624,9 @@ _PROFILE_FIELDS = [
 	(r"\bgrade\b", "grade"),
 	(r"employee (id|number|code)", "employee_number"),
 	(r"date of joining|when.*join", "date_of_joining"),
+	(r"date of appointment", "custom_date_of_appointment"),
+	(r"retire", "date_of_retirement"),
+	(r"\bstatus\b|am i active", "status"),
 ]
 _PROFILE_LABELS = {
 	"employee_name": _("Your name on file"),
@@ -623,7 +637,11 @@ _PROFILE_LABELS = {
 	"grade": _("Grade"),
 	"employee_number": _("Employee Number"),
 	"date_of_joining": _("Date of Joining"),
+	"custom_date_of_appointment": _("Date of Appointment"),
+	"date_of_retirement": _("Date of Retirement"),
+	"status": _("Employment Status"),
 }
+_PROFILE_DATE_FIELDS = ("date_of_joining", "custom_date_of_appointment", "date_of_retirement")
 
 
 def _my_profile(employee, message=None):
@@ -634,12 +652,12 @@ def _my_profile(employee, message=None):
 		value = d.get(specific)
 		if not value:
 			return _("{0} isn't on file for you. Please check with HR.").format(_PROFILE_LABELS[specific])
-		if specific == "date_of_joining":
+		if specific in _PROFILE_DATE_FIELDS:
 			value = formatdate(value)
 		return _("{0}: {1}").format(_PROFILE_LABELS[specific], value)
 
 	lines = []
-	for key in ("designation", "department", "employment_type", "branch", "grade", "employee_number"):
+	for key in ("designation", "department", "employment_type", "branch", "grade", "employee_number", "status"):
 		if d.get(key):
 			lines.append("{0}: {1}".format(_PROFILE_LABELS[key], d[key]))
 	if d.get("date_of_joining"):
@@ -653,6 +671,7 @@ _CONTACT_FIELDS = [
 	(r"mobile|phone|cell", "cell_number"),
 	(r"personal email", "personal_email"),
 	(r"company email", "company_email"),
+	(r"permanent address", "permanent_address"),
 	(r"\baddress\b", "current_address"),
 	(r"\bemail\b", "_email_generic"),
 ]
@@ -661,6 +680,7 @@ _CONTACT_LABELS = {
 	"personal_email": _("Personal Email"),
 	"company_email": _("Company Email"),
 	"current_address": _("Current Address"),
+	"permanent_address": _("Permanent Address"),
 }
 
 
@@ -680,7 +700,7 @@ def _my_contact_info(employee, message=None):
 
 	lines = [
 		"{0}: {1}".format(_CONTACT_LABELS[k], d[k])
-		for k in ("cell_number", "personal_email", "company_email", "current_address")
+		for k in ("cell_number", "personal_email", "company_email", "current_address", "permanent_address")
 		if d.get(k)
 	]
 	if not lines:
@@ -796,12 +816,14 @@ _STATUTORY_FIELDS = [
 	(r"\buan\b", "custom_uan"),
 	(r"provident fund|\bpf\b", "provident_fund_account"),
 	(r"aadhaar", "custom_aadhaar_number"),
+	(r"esic", "custom_esic_number"),
 ]
 _STATUTORY_LABELS = {
 	"pan_number": _("PAN"),
 	"custom_uan": _("UAN"),
 	"provident_fund_account": _("PF Account"),
 	"custom_aadhaar_number": _("Aadhaar"),
+	"custom_esic_number": _("ESIC Number"),
 }
 
 
@@ -822,6 +844,174 @@ def _statutory_ids(employee, message=None):
 	if not lines:
 		return _("No statutory ID numbers are on file for you yet. Please check with HR.")
 	return _("Your statutory IDs on file (masked for safety - HR can see the full numbers):") + "<br>" + "<br>".join(lines)
+
+
+_SALARY_BREAKUP_FIELDS = [
+	(r"ctc.*month|monthly ctc", "custom_ctcmonth"),
+	(r"\bctc\b", "ctc"),
+	(r"gross.*month|monthly gross", "custom_gross_salarymonth"),
+	(r"gross", "custom_gross_salaryannum"),
+	(r"net.*month|monthly.*(take.?home|net)|take.?home", "custom_net_salarymonth"),
+	(r"net salary|net.*annum", "custom_net_salaryannum"),
+	(r"deduct.*month", "custom_total_deductmonth"),
+	(r"deduct", "custom_total_deductannum"),
+	(r"allow.*month", "custom_total_allowmonth"),
+	(r"allow", "custom_total_allowannum"),
+	(r"benefit.*month", "custom_total_benefitmonth"),
+	(r"benefit", "custom_total_benefitannum"),
+]
+_SALARY_BREAKUP_LABELS = {
+	"ctc": _("CTC"),
+	"custom_ctcmonth": _("CTC per month"),
+	"custom_ctcannum": _("CTC per annum"),
+	"custom_gross_salarymonth": _("Gross Salary per month"),
+	"custom_gross_salaryannum": _("Gross Salary per annum"),
+	"custom_net_salarymonth": _("Net Salary per month"),
+	"custom_net_salaryannum": _("Net Salary per annum"),
+	"custom_total_deductmonth": _("Total Deductions per month"),
+	"custom_total_deductannum": _("Total Deductions per annum"),
+	"custom_total_allowmonth": _("Total Allowances per month"),
+	"custom_total_allowannum": _("Total Allowances per annum"),
+	"custom_total_benefitmonth": _("Total Benefits per month"),
+	"custom_total_benefitannum": _("Total Benefits per annum"),
+}
+
+
+def _salary_breakup(employee, message=None):
+	# Same sensitivity tier as the payslip intent - this is the employee's
+	# own compensation summary, not anyone else's.
+	d = frappe.db.get_value("Employee", employee, list(_SALARY_BREAKUP_LABELS.keys()), as_dict=True)
+	specific = _pick_field(message, _SALARY_BREAKUP_FIELDS)
+
+	if specific:
+		value = d.get(specific)
+		if not value:
+			return _("{0} isn't on file for you. Please check with HR.").format(_SALARY_BREAKUP_LABELS[specific])
+		return _("Your {0}: {1}").format(_SALARY_BREAKUP_LABELS[specific], fmt_money(value))
+
+	lines = [
+		"{0}: {1}".format(_SALARY_BREAKUP_LABELS[k], fmt_money(d[k]))
+		for k in ("ctc", "custom_gross_salaryannum", "custom_net_salaryannum", "custom_total_deductannum", "custom_total_allowannum")
+		if d.get(k)
+	]
+	if not lines:
+		return _("No salary breakup is on file for you yet. Please check with HR.")
+	return _("Your salary breakup:") + "<br>" + "<br>".join(lines)
+
+
+def _weekly_off(employee, message=None):
+	d = frappe.db.get_value("Employee", employee, ["weekly_off_type", "fixed_off_day"], as_dict=True)
+	if d.fixed_off_day:
+		return _("Your weekly off is {0}.").format(d.fixed_off_day)
+	if d.weekly_off_type:
+		return _("Your weekly off type is: {0}.").format(d.weekly_off_type)
+	return _("No weekly off is set on your employee record. Please check with HR.")
+
+
+def _education(employee, message=None):
+	rows = frappe.get_all(
+		"Employee Education",
+		filters={"parent": employee},
+		fields=["qualification", "school_univ", "year_of_passing", "class_per"],
+		order_by="idx asc",
+	)
+	if not rows:
+		return _("No education details are on file for you yet. Please check with HR.")
+	lines = [
+		_("{0} - {1}{2}").format(
+			r.qualification or _("(qualification not on file)"),
+			r.school_univ or _("(institute not on file)"),
+			", {0}".format(r.year_of_passing) if r.year_of_passing else "",
+		)
+		for r in rows
+	]
+	return _("Your education on file:") + "<br>" + "<br>".join(lines)
+
+
+def _work_history(employee, message=None):
+	rows = frappe.get_all(
+		"Employee External Work History",
+		filters={"parent": employee},
+		fields=["company_name", "designation", "total_experience"],
+		order_by="idx asc",
+	)
+	if not rows:
+		return _("No previous work history is on file for you.")
+	lines = [
+		_("{0} - {1}").format(r.company_name or _("(company not on file)"), r.designation or "")
+		for r in rows
+	]
+	return _("Your work history on file:") + "<br>" + "<br>".join(lines)
+
+
+_PASSPORT_FIELDS = [
+	(r"number", "passport_number"),
+	(r"valid|expir", "valid_upto"),
+	(r"issue date|date of issue", "date_of_issue"),
+	(r"place of issue|where.*issued", "place_of_issue"),
+]
+_PASSPORT_LABELS = {
+	"passport_number": _("Passport Number"),
+	"valid_upto": _("Valid Until"),
+	"date_of_issue": _("Date of Issue"),
+	"place_of_issue": _("Place of Issue"),
+}
+
+
+def _passport_details(employee, message=None):
+	d = frappe.db.get_value("Employee", employee, list(_PASSPORT_LABELS.keys()), as_dict=True)
+	specific = _pick_field(message, _PASSPORT_FIELDS)
+
+	if specific:
+		value = d.get(specific)
+		if not value:
+			return _("{0} isn't on file for you. Please check with HR.").format(_PASSPORT_LABELS[specific])
+		if specific in ("valid_upto", "date_of_issue"):
+			value = formatdate(value)
+		return _("Your {0}: {1}").format(_PASSPORT_LABELS[specific], value)
+
+	if not d.passport_number:
+		return _("No passport details are on file for you.")
+	lines = [_("Passport Number: {0}").format(_mask_tail(d.passport_number))]
+	if d.valid_upto:
+		lines.append(_("Valid Until: {0}").format(formatdate(d.valid_upto)))
+	if d.place_of_issue:
+		lines.append(_("Place of Issue: {0}").format(d.place_of_issue))
+	return _("Your passport details on file:") + "<br>" + "<br>".join(lines)
+
+
+_PERSONAL_FIELDS = [
+	(r"marital|married", "marital_status"),
+	(r"blood group", "blood_group"),
+	(r"health insurance", "health_insurance_no"),
+	(r"health", "health_details"),
+]
+_PERSONAL_LABELS = {
+	"marital_status": _("Marital Status"),
+	"blood_group": _("Blood Group"),
+	"health_details": _("Health Details"),
+	"health_insurance_no": _("Health Insurance No"),
+}
+
+
+def _personal_details(employee, message=None):
+	d = frappe.db.get_value("Employee", employee, list(_PERSONAL_LABELS.keys()), as_dict=True)
+	specific = _pick_field(message, _PERSONAL_FIELDS)
+
+	if specific:
+		value = d.get(specific)
+		if not value:
+			return _("{0} isn't on file for you. Please check with HR.").format(_PERSONAL_LABELS[specific])
+		return _("Your {0}: {1}").format(_PERSONAL_LABELS[specific], value)
+
+	lines = [
+		"{0}: {1}".format(_PERSONAL_LABELS[k], d[k])
+		for k in ("marital_status", "blood_group", "health_details", "health_insurance_no")
+		if d.get(k)
+	]
+	if not lines:
+		return _("No personal details are on file for you yet.")
+	return _("Your personal details on file:") + "<br>" + "<br>".join(lines)
 
 
 # ---- HRMS how-to / config info (no Employee record needed) ----
@@ -963,9 +1153,10 @@ def _help(*args):
 		"- \"I want to resign, what do I do?\""
 		"<br><br>"
 		"Or about your own profile - designation, department, contact "
-		"details on file, emergency contact, bank details, PAN/UAN, "
-		"probation/confirmation date, contract end date, your shift, or "
-		"your leave/expense/shift approvers."
+		"details, emergency contact, bank details, PAN/UAN/ESIC, CTC and "
+		"salary breakup, probation/confirmation date, contract end date, "
+		"your shift/weekly off, education, work history, passport, "
+		"personal/health details, or your leave/expense/shift approvers."
 	)
 
 
@@ -1007,6 +1198,10 @@ INTENTS = [
 	# usage meaning "which bank account my salary goes to") would otherwise
 	# be caught by payslip's bare "my salary" pattern below.
 	_entry("bank_details", r"bank (details|account|name)|salary account|account number|which bank|\bifsc\b", _bank_details, True, ["bank", "ifsc"]),
+	# Checked before payslip too - "what's my ctc"/"gross salary"/"net
+	# salary" are about the compensation summary on the Employee record
+	# itself, not a specific month's Salary Slip.
+	_entry("salary_breakup", r"\bctc\b|gross salary|net salary|take.?home|total (deduct|allow|benefit)", _salary_breakup, True, ["ctc"]),
 	_entry("payslip", r"pay ?slip|salary slip|my salary", _payslip, True, ["payslip", "salary", "slip"]),
 	_entry("comp_off", r"comp ?off|compensatory", _comp_off, True, ["comp", "compensatory"]),
 	_entry("expense_claim", r"expense claim|reimbursement", _expense_claim, True, ["expense", "claim", "reimbursement"]),
@@ -1027,14 +1222,19 @@ INTENTS = [
 	_entry("contract_end", r"contract end|when.*(does )?my contract", _contract_end, True, ["contract"]),
 	_entry("approvers", r"who approves|my (leave|expense|shift) approver", _approvers, True, ["approver", "approves"]),
 	_entry("my_shift", r"my shift|which shift|what shift", _my_shift, True, ["shift"]),
-	_entry("statutory_ids", r"\bpan\b|\buan\b|aadhaar|provident fund account|\bpf number\b", _statutory_ids, True, ["pan", "uan", "aadhaar"]),
+	_entry("weekly_off", r"weekly off|fixed off day|which day.*off", _weekly_off, True, ["weekly"]),
+	_entry("statutory_ids", r"\bpan\b|\buan\b|aadhaar|provident fund account|\bpf number\b|\besic\b", _statutory_ids, True, ["pan", "uan", "aadhaar", "esic"]),
 	_entry(
 		"my_profile",
-		r"my (profile|designation|department|branch|(full )?name|employee (id|number|code))|which department|what.*my (designation|name)",
+		r"my (profile|designation|department|branch|(full )?name|employee (id|number|code))|which department|what.*my (designation|name)|date of appointment|when.*i retire|am i active",
 		_my_profile,
 		True,
 		["designation", "department", "branch", "profile"],
 	),
+	_entry("education", r"my education|my qualification|which university|where.*i stud", _education, True, ["education", "qualification"]),
+	_entry("work_history", r"work history|previous compan|earlier job|past employ", _work_history, True, ["history"]),
+	_entry("passport_details", r"passport", _passport_details, True, ["passport"]),
+	_entry("personal_details", r"marital status|blood group|health insurance|health details|am i married", _personal_details, True, ["marital", "blood"]),
 	_entry("holiday", r"holiday", _next_holiday, True, ["holiday", "holidays"]),
 	_entry("manager", r"manager|report(s|ing)? ?to", _manager, True, ["manager", "reports", "reporting"]),
 	_entry(None, r"help|what can you|commands", _help, False),
