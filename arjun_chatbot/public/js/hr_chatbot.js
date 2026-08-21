@@ -1,12 +1,38 @@
 // arjun_chatbot/public/js/hr_chatbot.js
 //
-// Floating "ask HR" widget on every Desk page. Pure data lookup, no LLM -
-// every reply comes straight from arjun_chatbot.api.hr_chatbot.ask(), which
-// only ever answers with the logged-in user's own real HRMS data (see that
-// file for the full list of things it understands). Guest never sees this
-// (app_include_js is desk-only, never loaded on the onboarding portal).
+// ALIA - ATLAS Intelligent Assistant. Floating chat widget on every Desk
+// page. Pure data lookup, no LLM by default - every reply comes straight
+// from arjun_chatbot.api.hr_chatbot.ask(), which only ever answers with
+// the logged-in user's own real HRMS data (see that file for the full
+// list of things it understands). Guest never sees this (app_include_js
+// is desk-only, never loaded on the onboarding portal).
 (function () {
 	if (frappe.session.user === "Guest") return;
+
+	// Just the face - the gradient circle behind it comes from CSS
+	// (.hrbot-toggle/.hrbot-avatar/.hrbot-row-avatar), so the same markup
+	// works at every size without duplicating an SVG gradient <defs> id
+	// across multiple copies in the DOM.
+	var ALIA_AVATAR_SVG =
+		"<svg viewBox='0 0 40 40' fill='none' xmlns='http://www.w3.org/2000/svg'>" +
+		"<path d='M9 24c0-7.5 4.5-14 11-14s11 6.5 11 14c0 2-1.2 3-2.4 3-1-4.5-2.6-8-8.6-8s-7.6 3.5-8.6 8c-1.2 0-2.4-1-2.4-3z' fill='#2D2140'/>" +
+		"<circle cx='20' cy='22' r='8' fill='#FCE4D6'/>" +
+		"<circle cx='16.8' cy='21.5' r='1.1' fill='#2D2140'/>" +
+		"<circle cx='23.2' cy='21.5' r='1.1' fill='#2D2140'/>" +
+		"<path d='M16.5 25c1.3 1.6 5.7 1.6 7 0' stroke='#B5695A' stroke-width='1.2' fill='none' stroke-linecap='round'/>" +
+		"</svg>";
+
+	var SEND_ICON_SVG =
+		"<svg viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'>" +
+		"<path d='M3 11l17-8-6 17-3-7-8-2z' fill='currentColor'/>" +
+		"</svg>";
+
+	var QUICK_REPLIES = [
+		{ label: "💰 Payslip", query: "my latest payslip" },
+		{ label: "🌴 Leave Balance", query: "what's my leave balance" },
+		{ label: "📅 Attendance", query: "my attendance this month" },
+		{ label: "🙍 My Profile", query: "my profile" },
+	];
 
 	function escapeHtml(s) {
 		var div = document.createElement("div");
@@ -16,25 +42,77 @@
 
 	function addMessage(text, who) {
 		var messages = document.getElementById("hrbot-messages");
-		var div = document.createElement("div");
-		div.className = "hrbot-msg " + who;
+		var row = document.createElement("div");
+		row.className = "hrbot-row " + who;
+		if (who === "bot") {
+			var avatar = document.createElement("div");
+			avatar.className = "hrbot-row-avatar";
+			avatar.innerHTML = ALIA_AVATAR_SVG;
+			row.appendChild(avatar);
+		}
+		var bubble = document.createElement("div");
+		bubble.className = "hrbot-msg " + who;
 		// Bot replies are built entirely server-side from fixed templates
 		// (see hr_chatbot.py) - safe to render as HTML. User's own typed
 		// text is escaped since it's echoed back into the transcript.
-		div.innerHTML = who === "bot" ? text : escapeHtml(text);
-		messages.appendChild(div);
+		bubble.innerHTML = who === "bot" ? text : escapeHtml(text);
+		row.appendChild(bubble);
+		messages.appendChild(row);
 		messages.scrollTop = messages.scrollHeight;
+		return row;
+	}
+
+	function addChips() {
+		var messages = document.getElementById("hrbot-messages");
+		var wrap = document.createElement("div");
+		wrap.className = "hrbot-chips";
+		QUICK_REPLIES.forEach(function (item) {
+			var chip = document.createElement("button");
+			chip.type = "button";
+			chip.className = "hrbot-chip";
+			chip.textContent = item.label;
+			chip.addEventListener("click", function () {
+				ask(item.query);
+			});
+			wrap.appendChild(chip);
+		});
+		messages.appendChild(wrap);
+	}
+
+	function showTyping() {
+		var messages = document.getElementById("hrbot-messages");
+		var row = document.createElement("div");
+		row.className = "hrbot-row bot";
+		row.id = "hrbot-typing-row";
+		var avatar = document.createElement("div");
+		avatar.className = "hrbot-row-avatar";
+		avatar.innerHTML = ALIA_AVATAR_SVG;
+		row.appendChild(avatar);
+		var bubble = document.createElement("div");
+		bubble.className = "hrbot-msg bot hrbot-typing";
+		bubble.innerHTML = "<span></span><span></span><span></span>";
+		row.appendChild(bubble);
+		messages.appendChild(row);
+		messages.scrollTop = messages.scrollHeight;
+	}
+
+	function hideTyping() {
+		var row = document.getElementById("hrbot-typing-row");
+		if (row) row.remove();
 	}
 
 	function ask(message) {
 		addMessage(message, "user");
+		showTyping();
 		frappe.call({
 			method: "arjun_chatbot.api.hr_chatbot.ask",
 			args: { message: message },
 			callback: function (r) {
+				hideTyping();
 				addMessage((r.message && r.message.reply) || "Sorry, something went wrong.", "bot");
 			},
 			error: function () {
+				hideTyping();
 				addMessage("Sorry, something went wrong. Please try again.", "bot");
 			},
 		});
@@ -54,8 +132,8 @@
 		var t = toggle.getBoundingClientRect();
 		// offsetWidth/Height read 0 while display:none (before first open) -
 		// fall back to the CSS defaults in that case.
-		var panelW = panel.offsetWidth || 320;
-		var panelH = panel.offsetHeight || 420;
+		var panelW = panel.offsetWidth || 336;
+		var panelH = panel.offsetHeight || 460;
 		var left = Math.max(4, Math.min(window.innerWidth - panelW - 4, t.right - panelW));
 		var top = Math.max(4, Math.min(window.innerHeight - panelH - 4, t.top - panelH - PANEL_GAP));
 		panel.style.left = left + "px";
@@ -139,18 +217,25 @@
 	function buildWidget() {
 		var toggle = document.createElement("div");
 		toggle.id = "hrbot-toggle";
-		toggle.title = "Ask HR";
-		toggle.innerHTML = "💬";
+		toggle.title = "Ask ALIA";
+		toggle.innerHTML = ALIA_AVATAR_SVG + "<span class='hrbot-dot'></span>";
 		document.body.appendChild(toggle);
 
 		var panel = document.createElement("div");
 		panel.id = "hrbot-panel";
 		panel.innerHTML =
-			"<div id='hrbot-header'><span>Ask HR</span><span class='hrbot-close'>&times;</span></div>" +
+			"<div id='hrbot-header'>" +
+			"<div class='hrbot-header-left'>" +
+			"<div class='hrbot-avatar'>" + ALIA_AVATAR_SVG + "</div>" +
+			"<div><div class='hrbot-title'>ALIA</div>" +
+			"<div class='hrbot-subtitle'><span class='hrbot-online-dot'></span>ATLAS Intelligent Assistant</div></div>" +
+			"</div>" +
+			"<span class='hrbot-close'>&times;</span>" +
+			"</div>" +
 			"<div id='hrbot-messages'></div>" +
 			"<div id='hrbot-input-row'>" +
-			"<input id='hrbot-input' type='text' placeholder='e.g. What's my leave balance?'>" +
-			"<button id='hrbot-send' type='button'>Send</button>" +
+			"<input id='hrbot-input' type='text' placeholder='Ask ALIA anything...'>" +
+			"<button id='hrbot-send' type='button'>" + SEND_ICON_SVG + "</button>" +
 			"</div>";
 		document.body.appendChild(panel);
 
@@ -169,9 +254,10 @@
 			if (!opened) {
 				opened = true;
 				addMessage(
-					"Hi! I can look up your leave balance, leave status, attendance, payslip, holidays, or reporting manager. What would you like to know?",
+					"Hi, I'm ALIA 👋 Your ATLAS Intelligent Assistant. I can look up your leave, attendance, payslip, profile and a lot more - or just ask away!",
 					"bot"
 				);
+				addChips();
 			}
 		});
 		panel.querySelector(".hrbot-close").addEventListener("click", function () {
