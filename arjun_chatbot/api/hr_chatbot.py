@@ -588,46 +588,101 @@ def _mask_tail(value, keep=4):
 	return "*" * (len(value) - keep) + value[-keep:]
 
 
+def _pick_field(message, mapping):
+	"""Bundle-style intents (profile, contact info, bank details, approvers,
+	statutory IDs) default to showing everything in the category - but if
+	the question names one specific thing ("my pan no?", "what is my full
+	name"), that one thing should come back alone, not the whole bundle.
+	mapping is an ordered list of (regex, field_key) pairs, most specific
+	first; returns the first matching field_key, or None if the question
+	was generic ("my profile", "my statutory ids") and the caller should
+	show the full bundle instead."""
+	msg = (message or "").lower()
+	for pattern, key in mapping:
+		if re.search(pattern, msg):
+			return key
+	return None
+
+
+_PROFILE_FIELDS = [
+	(r"\bname\b", "employee_name"),
+	(r"designation", "designation"),
+	(r"department", "department"),
+	(r"employment type", "employment_type"),
+	(r"\bbranch\b", "branch"),
+	(r"\bgrade\b", "grade"),
+	(r"employee (id|number|code)", "employee_number"),
+	(r"date of joining|when.*join", "date_of_joining"),
+]
+_PROFILE_LABELS = {
+	"employee_name": _("Your name on file"),
+	"designation": _("Designation"),
+	"department": _("Department"),
+	"employment_type": _("Employment Type"),
+	"branch": _("Branch"),
+	"grade": _("Grade"),
+	"employee_number": _("Employee Number"),
+	"date_of_joining": _("Date of Joining"),
+}
+
+
 def _my_profile(employee, message=None):
-	d = frappe.db.get_value(
-		"Employee",
-		employee,
-		["designation", "department", "employment_type", "branch", "grade", "employee_number", "date_of_joining"],
-		as_dict=True,
-	)
+	d = frappe.db.get_value("Employee", employee, list(_PROFILE_LABELS.keys()), as_dict=True)
+	specific = _pick_field(message, _PROFILE_FIELDS)
+
+	if specific:
+		value = d.get(specific)
+		if not value:
+			return _("{0} isn't on file for you. Please check with HR.").format(_PROFILE_LABELS[specific])
+		if specific == "date_of_joining":
+			value = formatdate(value)
+		return _("{0}: {1}").format(_PROFILE_LABELS[specific], value)
+
 	lines = []
-	if d.designation:
-		lines.append(_("Designation: {0}").format(d.designation))
-	if d.department:
-		lines.append(_("Department: {0}").format(d.department))
-	if d.employment_type:
-		lines.append(_("Employment Type: {0}").format(d.employment_type))
-	if d.branch:
-		lines.append(_("Branch: {0}").format(d.branch))
-	if d.grade:
-		lines.append(_("Grade: {0}").format(d.grade))
-	if d.employee_number:
-		lines.append(_("Employee Number: {0}").format(d.employee_number))
-	if d.date_of_joining:
-		lines.append(_("Date of Joining: {0}").format(formatdate(d.date_of_joining)))
+	for key in ("designation", "department", "employment_type", "branch", "grade", "employee_number"):
+		if d.get(key):
+			lines.append("{0}: {1}".format(_PROFILE_LABELS[key], d[key]))
+	if d.get("date_of_joining"):
+		lines.append(_("Date of Joining: {0}").format(formatdate(d["date_of_joining"])))
 	if not lines:
 		return _("Your profile doesn't have these details filled in yet. Please check with HR.")
 	return _("Your profile:") + "<br>" + "<br>".join(lines)
 
 
+_CONTACT_FIELDS = [
+	(r"mobile|phone|cell", "cell_number"),
+	(r"personal email", "personal_email"),
+	(r"company email", "company_email"),
+	(r"\baddress\b", "current_address"),
+	(r"\bemail\b", "_email_generic"),
+]
+_CONTACT_LABELS = {
+	"cell_number": _("Mobile"),
+	"personal_email": _("Personal Email"),
+	"company_email": _("Company Email"),
+	"current_address": _("Current Address"),
+}
+
+
 def _my_contact_info(employee, message=None):
-	d = frappe.db.get_value(
-		"Employee", employee, ["cell_number", "personal_email", "company_email", "current_address"], as_dict=True
-	)
-	lines = []
-	if d.cell_number:
-		lines.append(_("Mobile: {0}").format(d.cell_number))
-	if d.personal_email:
-		lines.append(_("Personal Email: {0}").format(d.personal_email))
-	if d.company_email:
-		lines.append(_("Company Email: {0}").format(d.company_email))
-	if d.current_address:
-		lines.append(_("Current Address: {0}").format(d.current_address))
+	d = frappe.db.get_value("Employee", employee, list(_CONTACT_LABELS.keys()), as_dict=True)
+	specific = _pick_field(message, _CONTACT_FIELDS)
+	if specific == "_email_generic":
+		# Bare "my email", no personal/company qualifier - prefer whichever is
+		# actually on file, company email first.
+		specific = "company_email" if d.get("company_email") else "personal_email"
+
+	if specific:
+		value = d.get(specific)
+		if not value:
+			return _("{0} isn't on file for you. Please check with HR.").format(_CONTACT_LABELS[specific])
+		return _("{0}: {1}").format(_CONTACT_LABELS[specific], value)
+
+	lines = [
+		"{0}: {1}".format(_CONTACT_LABELS[k], d[k])
+		for k in ("cell_number", "personal_email", "company_email", "current_address")
+		if d.get(k)
+	]
 	if not lines:
 		return _("No contact details are on file for you yet. Please check with HR.")
 	return _("Your contact details on file:") + "<br>" + "<br>".join(lines)
@@ -663,16 +718,31 @@ def _contract_end(employee, message=None):
 	return _("Your contract end date is {0}.").format(formatdate(end_date))
 
 
+_APPROVER_FIELDS = [
+	(r"leave.*approv", "leave_approver"),
+	(r"expense.*approv", "expense_approver"),
+	(r"shift.*approv", "shift_request_approver"),
+]
+_APPROVER_LABELS = {
+	"leave_approver": _("Leave approver"),
+	"expense_approver": _("Expense approver"),
+	"shift_request_approver": _("Shift request approver"),
+}
+
+
 def _approvers(employee, message=None):
-	d = frappe.db.get_value(
-		"Employee", employee, ["leave_approver", "expense_approver", "shift_request_approver"], as_dict=True
-	)
+	d = frappe.db.get_value("Employee", employee, list(_APPROVER_LABELS.keys()), as_dict=True)
+	specific = _pick_field(message, _APPROVER_FIELDS)
+
+	if specific:
+		user_id = d.get(specific)
+		if not user_id:
+			return _("No {0} is set on your employee record. Please check with HR.").format(_APPROVER_LABELS[specific].lower())
+		name = frappe.db.get_value("User", user_id, "full_name") or user_id
+		return _("Your {0}: {1}").format(_APPROVER_LABELS[specific].lower(), name)
+
 	lines = []
-	for field, label in (
-		("leave_approver", _("Leave approver")),
-		("expense_approver", _("Expense approver")),
-		("shift_request_approver", _("Shift request approver")),
-	):
+	for field, label in _APPROVER_LABELS.items():
 		user_id = d.get(field)
 		if user_id:
 			name = frappe.db.get_value("User", user_id, "full_name") or user_id
@@ -689,8 +759,26 @@ def _my_shift(employee, message=None):
 	return _("Your shift is {0}.").format(shift)
 
 
+_BANK_FIELDS = [
+	(r"ifsc", "ifsc_code"),
+	(r"account (number|no)|a/?c no", "bank_ac_no"),
+	(r"bank name|which bank", "bank_name"),
+]
+_BANK_LABELS = {"bank_name": _("Bank"), "bank_ac_no": _("Account"), "ifsc_code": _("IFSC")}
+
+
 def _bank_details(employee, message=None):
-	d = frappe.db.get_value("Employee", employee, ["bank_name", "bank_ac_no", "ifsc_code"], as_dict=True)
+	d = frappe.db.get_value("Employee", employee, list(_BANK_LABELS.keys()), as_dict=True)
+	specific = _pick_field(message, _BANK_FIELDS)
+
+	if specific:
+		value = d.get(specific)
+		if not value:
+			return _("{0} isn't on file for you. Please check with HR.").format(_BANK_LABELS[specific])
+		if specific == "bank_ac_no":
+			value = _mask_tail(value)
+		return _("{0}: {1}").format(_BANK_LABELS[specific], value)
+
 	if not d.bank_name and not d.bank_ac_no:
 		return _("No bank details are on file for you. Please check with HR.")
 	lines = []
@@ -703,22 +791,34 @@ def _bank_details(employee, message=None):
 	return _("Your bank details on file (account number partly masked for safety):") + "<br>" + "<br>".join(lines)
 
 
+_STATUTORY_FIELDS = [
+	(r"\bpan\b", "pan_number"),
+	(r"\buan\b", "custom_uan"),
+	(r"provident fund|\bpf\b", "provident_fund_account"),
+	(r"aadhaar", "custom_aadhaar_number"),
+]
+_STATUTORY_LABELS = {
+	"pan_number": _("PAN"),
+	"custom_uan": _("UAN"),
+	"provident_fund_account": _("PF Account"),
+	"custom_aadhaar_number": _("Aadhaar"),
+}
+
+
 def _statutory_ids(employee, message=None):
-	d = frappe.db.get_value(
-		"Employee",
-		employee,
-		["pan_number", "custom_uan", "provident_fund_account", "custom_aadhaar_number"],
-		as_dict=True,
-	)
+	d = frappe.db.get_value("Employee", employee, list(_STATUTORY_LABELS.keys()), as_dict=True)
+	specific = _pick_field(message, _STATUTORY_FIELDS)
+
+	if specific:
+		value = d.get(specific)
+		if not value:
+			return _("No {0} is on file for you yet. Please check with HR.").format(_STATUTORY_LABELS[specific])
+		return _("Your {0}: {1}").format(_STATUTORY_LABELS[specific], _mask_tail(value))
+
 	lines = []
-	if d.pan_number:
-		lines.append(_("PAN: {0}").format(_mask_tail(d.pan_number)))
-	if d.custom_uan:
-		lines.append(_("UAN: {0}").format(_mask_tail(d.custom_uan)))
-	if d.provident_fund_account:
-		lines.append(_("PF Account: {0}").format(_mask_tail(d.provident_fund_account)))
-	if d.custom_aadhaar_number:
-		lines.append(_("Aadhaar: {0}").format(_mask_tail(d.custom_aadhaar_number)))
+	for field, label in _STATUTORY_LABELS.items():
+		if d.get(field):
+			lines.append("{0}: {1}".format(label, _mask_tail(d[field])))
 	if not lines:
 		return _("No statutory ID numbers are on file for you yet. Please check with HR.")
 	return _("Your statutory IDs on file (masked for safety - HR can see the full numbers):") + "<br>" + "<br>".join(lines)
@@ -906,7 +1006,7 @@ INTENTS = [
 	# Checked before payslip - "my salary account" (a real, common Indian
 	# usage meaning "which bank account my salary goes to") would otherwise
 	# be caught by payslip's bare "my salary" pattern below.
-	_entry("bank_details", r"bank (details|account)|salary account|my account number|which bank", _bank_details, True, ["bank"]),
+	_entry("bank_details", r"bank (details|account|name)|salary account|account number|which bank|\bifsc\b", _bank_details, True, ["bank", "ifsc"]),
 	_entry("payslip", r"pay ?slip|salary slip|my salary", _payslip, True, ["payslip", "salary", "slip"]),
 	_entry("comp_off", r"comp ?off|compensatory", _comp_off, True, ["comp", "compensatory"]),
 	_entry("expense_claim", r"expense claim|reimbursement", _expense_claim, True, ["expense", "claim", "reimbursement"]),
@@ -922,13 +1022,19 @@ INTENTS = [
 	# Checked before my_contact_info - "who is my emergency contact" would
 	# otherwise be ambiguous with a generic contact-details query.
 	_entry("emergency_contact", r"emergency contact|emergency phone", _emergency_contact, True, ["emergency"]),
-	_entry("my_contact_info", r"my (mobile|phone|personal email|company email|address)\b|contact (details|info)", _my_contact_info, True, ["mobile", "phone", "address"]),
+	_entry("my_contact_info", r"my (mobile|phone|personal email|company email|email|address)\b|contact (details|info)", _my_contact_info, True, ["mobile", "phone", "address"]),
 	_entry("probation_status", r"probation|confirmation date|when.*(i be )?confirm", _probation_status, True, ["probation", "confirmation"]),
 	_entry("contract_end", r"contract end|when.*(does )?my contract", _contract_end, True, ["contract"]),
 	_entry("approvers", r"who approves|my (leave|expense|shift) approver", _approvers, True, ["approver", "approves"]),
 	_entry("my_shift", r"my shift|which shift|what shift", _my_shift, True, ["shift"]),
 	_entry("statutory_ids", r"\bpan\b|\buan\b|aadhaar|provident fund account|\bpf number\b", _statutory_ids, True, ["pan", "uan", "aadhaar"]),
-	_entry("my_profile", r"my (profile|designation|department|branch|employee (id|number|code))|which department|what.*my designation", _my_profile, True, ["designation", "department", "branch", "profile"]),
+	_entry(
+		"my_profile",
+		r"my (profile|designation|department|branch|(full )?name|employee (id|number|code))|which department|what.*my (designation|name)",
+		_my_profile,
+		True,
+		["designation", "department", "branch", "profile"],
+	),
 	_entry("holiday", r"holiday", _next_holiday, True, ["holiday", "holidays"]),
 	_entry("manager", r"manager|report(s|ing)? ?to", _manager, True, ["manager", "reports", "reporting"]),
 	_entry(None, r"help|what can you|commands", _help, False),
