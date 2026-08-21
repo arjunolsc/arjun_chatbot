@@ -33,6 +33,7 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	overflow: hidden;
 	cursor: move;
 	box-shadow: 0 6px 20px rgba(167, 139, 250, 0.45);
 	z-index: 4000;
@@ -44,9 +45,16 @@
 #hrbot-toggle:hover {
 	transform: scale(1.08);
 }
-#hrbot-toggle svg {
-	width: 38px;
-	height: 38px;
+/* ALIA's avatar photo fills its circular container edge-to-edge - the
+   container's own gradient background (above) only shows briefly as a
+   fallback color while the image loads. */
+.hrbot-avatar-img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	object-position: center 20%;
+	border-radius: 50%;
+	display: block;
 	pointer-events: none;
 }
 #hrbot-toggle .hrbot-dot {
@@ -111,14 +119,11 @@
 	height: 36px;
 	border-radius: 50%;
 	background: rgba(255, 255, 255, 0.25);
+	overflow: hidden;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	flex-shrink: 0;
-}
-#hrbot-header .hrbot-avatar svg {
-	width: 30px;
-	height: 30px;
 }
 #hrbot-header .hrbot-title {
 	font-weight: 700;
@@ -189,13 +194,10 @@
 	border-radius: 50%;
 	flex-shrink: 0;
 	background: var(--alia-grad);
+	overflow: hidden;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-}
-.hrbot-row-avatar svg {
-	width: 18px;
-	height: 18px;
 }
 
 .hrbot-msg {

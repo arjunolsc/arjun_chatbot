@@ -9,18 +9,12 @@
 (function () {
 	if (frappe.session.user === "Guest") return;
 
-	// Just the face - the gradient circle behind it comes from CSS
-	// (.hrbot-toggle/.hrbot-avatar/.hrbot-row-avatar), so the same markup
-	// works at every size without duplicating an SVG gradient <defs> id
-	// across multiple copies in the DOM.
-	var ALIA_AVATAR_SVG =
-		"<svg viewBox='0 0 40 40' fill='none' xmlns='http://www.w3.org/2000/svg'>" +
-		"<path d='M9 24c0-7.5 4.5-14 11-14s11 6.5 11 14c0 2-1.2 3-2.4 3-1-4.5-2.6-8-8.6-8s-7.6 3.5-8.6 8c-1.2 0-2.4-1-2.4-3z' fill='#2D2140'/>" +
-		"<circle cx='20' cy='22' r='8' fill='#FCE4D6'/>" +
-		"<circle cx='16.8' cy='21.5' r='1.1' fill='#2D2140'/>" +
-		"<circle cx='23.2' cy='21.5' r='1.1' fill='#2D2140'/>" +
-		"<path d='M16.5 25c1.3 1.6 5.7 1.6 7 0' stroke='#B5695A' stroke-width='1.2' fill='none' stroke-linecap='round'/>" +
-		"</svg>";
+	// ALIA's avatar - a provided illustration (public/images/alia_avatar.png),
+	// cropped to a square headshot and resized down from the original
+	// 800x1300/1.9MB source to 300x300 so it stays fast to load as a small
+	// icon repeated across every desk page.
+	var ALIA_AVATAR_HTML =
+		"<img src='/assets/arjun_chatbot/images/alia_avatar.png' alt='ALIA' class='hrbot-avatar-img'>";
 
 	var SEND_ICON_SVG =
 		"<svg viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'>" +
@@ -47,7 +41,7 @@
 		if (who === "bot") {
 			var avatar = document.createElement("div");
 			avatar.className = "hrbot-row-avatar";
-			avatar.innerHTML = ALIA_AVATAR_SVG;
+			avatar.innerHTML = ALIA_AVATAR_HTML;
 			row.appendChild(avatar);
 		}
 		var bubble = document.createElement("div");
@@ -86,7 +80,7 @@
 		row.id = "hrbot-typing-row";
 		var avatar = document.createElement("div");
 		avatar.className = "hrbot-row-avatar";
-		avatar.innerHTML = ALIA_AVATAR_SVG;
+		avatar.innerHTML = ALIA_AVATAR_HTML;
 		row.appendChild(avatar);
 		var bubble = document.createElement("div");
 		bubble.className = "hrbot-msg bot hrbot-typing";
@@ -218,7 +212,7 @@
 		var toggle = document.createElement("div");
 		toggle.id = "hrbot-toggle";
 		toggle.title = "Ask ALIA";
-		toggle.innerHTML = ALIA_AVATAR_SVG + "<span class='hrbot-dot'></span>";
+		toggle.innerHTML = ALIA_AVATAR_HTML + "<span class='hrbot-dot'></span>";
 		document.body.appendChild(toggle);
 
 		var panel = document.createElement("div");
@@ -226,7 +220,7 @@
 		panel.innerHTML =
 			"<div id='hrbot-header'>" +
 			"<div class='hrbot-header-left'>" +
-			"<div class='hrbot-avatar'>" + ALIA_AVATAR_SVG + "</div>" +
+			"<div class='hrbot-avatar'>" + ALIA_AVATAR_HTML + "</div>" +
 			"<div><div class='hrbot-title'>ALIA</div>" +
 			"<div class='hrbot-subtitle'><span class='hrbot-online-dot'></span>ATLAS Intelligent Assistant</div></div>" +
 			"</div>" +
