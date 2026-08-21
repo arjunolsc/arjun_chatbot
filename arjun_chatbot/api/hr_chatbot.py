@@ -306,12 +306,16 @@ def _extract_day(message):
 		d = getdate(nowdate())
 		return d.day, d.month, d.year
 
+	# The ordinal suffix is matched loosely ([a-z]{0,2}, not literally
+	# st/nd/rd/th) - "5ht august" (a real typo caught in testing, "ht"
+	# instead of "th") otherwise fails to match at all and silently falls
+	# through to the whole-month summary instead of the one day asked for.
 	months = "|".join(_MONTH_NAMES.keys())
-	match = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(" + months + r")\b\.?\s*('?\d{2,4})?", msg)
+	match = re.search(r"\b(\d{1,2})[a-z]{0,2}\s*(?:of\s+)?(" + months + r")\b\.?\s*('?\d{2,4})?", msg)
 	if match:
 		day, month, year_str = int(match.group(1)), _MONTH_NAMES[match.group(2)], match.group(3)
 	else:
-		match = re.search(r"\b(" + months + r")\b\.?\s*(\d{1,2})(?:st|nd|rd|th)?\s*('?\d{2,4})?", msg)
+		match = re.search(r"\b(" + months + r")\b\.?\s*(\d{1,2})[a-z]{0,2}\s*('?\d{2,4})?", msg)
 		if not match:
 			return None
 		month, day, year_str = _MONTH_NAMES[match.group(1)], int(match.group(2)), match.group(3)
@@ -570,6 +574,156 @@ def _resignation(employee, message=None):
 	).format(notice_line)
 
 
+def _mask_tail(value, keep=4):
+	"""Show only the last few characters of an ID/account number. Even
+	though this is the employee's own data, a chat transcript is exactly
+	the kind of place a full PAN/UAN/bank account number shouldn't sit in
+	plaintext (screenshots, synced chat history, shared devices) - the
+	full number stays visible to HR in the actual Employee record."""
+	value = str(value or "").strip()
+	if not value:
+		return None
+	if len(value) <= keep:
+		return value
+	return "*" * (len(value) - keep) + value[-keep:]
+
+
+def _my_profile(employee, message=None):
+	d = frappe.db.get_value(
+		"Employee",
+		employee,
+		["designation", "department", "employment_type", "branch", "grade", "employee_number", "date_of_joining"],
+		as_dict=True,
+	)
+	lines = []
+	if d.designation:
+		lines.append(_("Designation: {0}").format(d.designation))
+	if d.department:
+		lines.append(_("Department: {0}").format(d.department))
+	if d.employment_type:
+		lines.append(_("Employment Type: {0}").format(d.employment_type))
+	if d.branch:
+		lines.append(_("Branch: {0}").format(d.branch))
+	if d.grade:
+		lines.append(_("Grade: {0}").format(d.grade))
+	if d.employee_number:
+		lines.append(_("Employee Number: {0}").format(d.employee_number))
+	if d.date_of_joining:
+		lines.append(_("Date of Joining: {0}").format(formatdate(d.date_of_joining)))
+	if not lines:
+		return _("Your profile doesn't have these details filled in yet. Please check with HR.")
+	return _("Your profile:") + "<br>" + "<br>".join(lines)
+
+
+def _my_contact_info(employee, message=None):
+	d = frappe.db.get_value(
+		"Employee", employee, ["cell_number", "personal_email", "company_email", "current_address"], as_dict=True
+	)
+	lines = []
+	if d.cell_number:
+		lines.append(_("Mobile: {0}").format(d.cell_number))
+	if d.personal_email:
+		lines.append(_("Personal Email: {0}").format(d.personal_email))
+	if d.company_email:
+		lines.append(_("Company Email: {0}").format(d.company_email))
+	if d.current_address:
+		lines.append(_("Current Address: {0}").format(d.current_address))
+	if not lines:
+		return _("No contact details are on file for you yet. Please check with HR.")
+	return _("Your contact details on file:") + "<br>" + "<br>".join(lines)
+
+
+def _emergency_contact(employee, message=None):
+	d = frappe.db.get_value(
+		"Employee", employee, ["person_to_be_contacted", "emergency_phone_number", "relation"], as_dict=True
+	)
+	if not d.person_to_be_contacted and not d.emergency_phone_number:
+		return _("No emergency contact is on file for you. Please share one with HR.")
+	bits = [d.person_to_be_contacted or _("(name not on file)")]
+	if d.relation:
+		bits.append("({0})".format(d.relation))
+	if d.emergency_phone_number:
+		bits.append("- " + d.emergency_phone_number)
+	return _("Your emergency contact on file: {0}").format(" ".join(bits))
+
+
+def _probation_status(employee, message=None):
+	d = frappe.db.get_value("Employee", employee, ["scheduled_confirmation_date", "final_confirmation_date"], as_dict=True)
+	if d.final_confirmation_date:
+		return _("You're already confirmed, as of {0}.").format(formatdate(d.final_confirmation_date))
+	if d.scheduled_confirmation_date:
+		return _("Your confirmation is scheduled for {0}.").format(formatdate(d.scheduled_confirmation_date))
+	return _("No confirmation/probation date is set on your record. Please check with HR.")
+
+
+def _contract_end(employee, message=None):
+	end_date = frappe.db.get_value("Employee", employee, "contract_end_date")
+	if not end_date:
+		return _("You don't have a contract end date on record - if you're not on a fixed-term contract, that's expected.")
+	return _("Your contract end date is {0}.").format(formatdate(end_date))
+
+
+def _approvers(employee, message=None):
+	d = frappe.db.get_value(
+		"Employee", employee, ["leave_approver", "expense_approver", "shift_request_approver"], as_dict=True
+	)
+	lines = []
+	for field, label in (
+		("leave_approver", _("Leave approver")),
+		("expense_approver", _("Expense approver")),
+		("shift_request_approver", _("Shift request approver")),
+	):
+		user_id = d.get(field)
+		if user_id:
+			name = frappe.db.get_value("User", user_id, "full_name") or user_id
+			lines.append("{0}: {1}".format(label, name))
+	if not lines:
+		return _("No approvers are set on your employee record. Please check with HR.")
+	return _("Your approvers:") + "<br>" + "<br>".join(lines)
+
+
+def _my_shift(employee, message=None):
+	shift = frappe.db.get_value("Employee", employee, "default_shift")
+	if not shift:
+		return _("No default shift is set on your employee record.")
+	return _("Your shift is {0}.").format(shift)
+
+
+def _bank_details(employee, message=None):
+	d = frappe.db.get_value("Employee", employee, ["bank_name", "bank_ac_no", "ifsc_code"], as_dict=True)
+	if not d.bank_name and not d.bank_ac_no:
+		return _("No bank details are on file for you. Please check with HR.")
+	lines = []
+	if d.bank_name:
+		lines.append(_("Bank: {0}").format(d.bank_name))
+	if d.bank_ac_no:
+		lines.append(_("Account: {0}").format(_mask_tail(d.bank_ac_no)))
+	if d.ifsc_code:
+		lines.append(_("IFSC: {0}").format(d.ifsc_code))
+	return _("Your bank details on file (account number partly masked for safety):") + "<br>" + "<br>".join(lines)
+
+
+def _statutory_ids(employee, message=None):
+	d = frappe.db.get_value(
+		"Employee",
+		employee,
+		["pan_number", "custom_uan", "provident_fund_account", "custom_aadhaar_number"],
+		as_dict=True,
+	)
+	lines = []
+	if d.pan_number:
+		lines.append(_("PAN: {0}").format(_mask_tail(d.pan_number)))
+	if d.custom_uan:
+		lines.append(_("UAN: {0}").format(_mask_tail(d.custom_uan)))
+	if d.provident_fund_account:
+		lines.append(_("PF Account: {0}").format(_mask_tail(d.provident_fund_account)))
+	if d.custom_aadhaar_number:
+		lines.append(_("Aadhaar: {0}").format(_mask_tail(d.custom_aadhaar_number)))
+	if not lines:
+		return _("No statutory ID numbers are on file for you yet. Please check with HR.")
+	return _("Your statutory IDs on file (masked for safety - HR can see the full numbers):") + "<br>" + "<br>".join(lines)
+
+
 # ---- HRMS how-to / config info (no Employee record needed) ----
 
 
@@ -641,7 +795,25 @@ def _comp_off(employee, message=None):
 	)
 
 
-def _expense_claim():
+def _expense_claim(employee, message=None):
+	# Same how-to/data split as comp_off - "status of my expense claim"
+	# needs the real record, not instructions on how to file one.
+	if re.search(r"\bstatus\b|\btaken\b|\bhow much\b|\bpending\b", (message or "").lower()):
+		rows = frappe.get_all(
+			"Expense Claim",
+			filters={"employee": employee, "docstatus": ["!=", 2]},
+			fields=["name", "posting_date", "total_claimed_amount", "status"],
+			order_by="posting_date desc",
+			limit=5,
+		)
+		if not rows:
+			return _("You haven't filed any expense claims yet.")
+		lines = [
+			_("{0}: {1} - {2}").format(formatdate(r.posting_date), fmt_money(r.total_claimed_amount), r.status)
+			for r in rows
+		]
+		return _("Your recent expense claims:") + "<br>" + "<br>".join(lines)
+
 	return _(
 		"To raise a reimbursement: use the search bar at the top and type "
 		"\"New Expense Claim\". Add the expense items and attach receipts, "
@@ -689,6 +861,11 @@ def _help(*args):
 		"- \"How do I claim comp off?\"<br>"
 		"- \"How do I raise an expense claim?\"<br>"
 		"- \"I want to resign, what do I do?\""
+		"<br><br>"
+		"Or about your own profile - designation, department, contact "
+		"details on file, emergency contact, bank details, PAN/UAN, "
+		"probation/confirmation date, contract end date, your shift, or "
+		"your leave/expense/shift approvers."
 	)
 
 
@@ -726,9 +903,13 @@ INTENTS = [
 	# present (this misfired on "atendance this month" during testing).
 	_entry("attendance_regularize", r"regulari.*attendance|attendance.*regulari|correct.*attendance|attendance.*request", _attendance_regularize, False, ["regularize", "regularise", "correct"]),
 	_entry("attendance", r"attendance|present|absent", _attendance, True, ["attendance", "present", "absent"]),
+	# Checked before payslip - "my salary account" (a real, common Indian
+	# usage meaning "which bank account my salary goes to") would otherwise
+	# be caught by payslip's bare "my salary" pattern below.
+	_entry("bank_details", r"bank (details|account)|salary account|my account number|which bank", _bank_details, True, ["bank"]),
 	_entry("payslip", r"pay ?slip|salary slip|my salary", _payslip, True, ["payslip", "salary", "slip"]),
 	_entry("comp_off", r"comp ?off|compensatory", _comp_off, True, ["comp", "compensatory"]),
-	_entry("expense_claim", r"expense claim|reimbursement", _expense_claim, False, ["expense", "claim", "reimbursement"]),
+	_entry("expense_claim", r"expense claim|reimbursement", _expense_claim, True, ["expense", "claim", "reimbursement"]),
 	_entry("onboarding_docs", r"onboarding|document.*upload|upload.*document", _onboarding_docs, False, ["onboarding", "document", "documents", "upload"]),
 	_entry("notice_period", r"notice period|notice days", _notice_period, True, ["notice", "period", "days"]),
 	_entry(
@@ -738,6 +919,16 @@ INTENTS = [
 		True,
 		["resign", "resignation", "quit"],
 	),
+	# Checked before my_contact_info - "who is my emergency contact" would
+	# otherwise be ambiguous with a generic contact-details query.
+	_entry("emergency_contact", r"emergency contact|emergency phone", _emergency_contact, True, ["emergency"]),
+	_entry("my_contact_info", r"my (mobile|phone|personal email|company email|address)\b|contact (details|info)", _my_contact_info, True, ["mobile", "phone", "address"]),
+	_entry("probation_status", r"probation|confirmation date|when.*(i be )?confirm", _probation_status, True, ["probation", "confirmation"]),
+	_entry("contract_end", r"contract end|when.*(does )?my contract", _contract_end, True, ["contract"]),
+	_entry("approvers", r"who approves|my (leave|expense|shift) approver", _approvers, True, ["approver", "approves"]),
+	_entry("my_shift", r"my shift|which shift|what shift", _my_shift, True, ["shift"]),
+	_entry("statutory_ids", r"\bpan\b|\buan\b|aadhaar|provident fund account|\bpf number\b", _statutory_ids, True, ["pan", "uan", "aadhaar"]),
+	_entry("my_profile", r"my (profile|designation|department|branch|employee (id|number|code))|which department|what.*my designation", _my_profile, True, ["designation", "department", "branch", "profile"]),
 	_entry("holiday", r"holiday", _next_holiday, True, ["holiday", "holidays"]),
 	_entry("manager", r"manager|report(s|ing)? ?to", _manager, True, ["manager", "reports", "reporting"]),
 	_entry(None, r"help|what can you|commands", _help, False),
