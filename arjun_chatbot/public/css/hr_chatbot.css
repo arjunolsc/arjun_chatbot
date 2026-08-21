@@ -33,7 +33,11 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	overflow: hidden;
+	/* No overflow:hidden here - the photo already clips itself to a circle
+	   via its own border-radius (see .hrbot-avatar-img), and this container
+	   needs to stay open so the online-status dot (positioned at its edge)
+	   renders as a complete circle instead of getting cut off by the same
+	   clip - that's exactly what was happening before this fix. */
 	cursor: move;
 	box-shadow: 0 6px 20px rgba(167, 139, 250, 0.45);
 	z-index: 4000;

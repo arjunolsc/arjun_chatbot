@@ -11,10 +11,17 @@
 
 	// ALIA's avatar - a provided illustration (public/images/alia_avatar.png),
 	// cropped to a square headshot and resized down from the original
-	// 800x1300/1.9MB source to 300x300 so it stays fast to load as a small
-	// icon repeated across every desk page.
+	// full-resolution source so it stays fast to load as a small icon
+	// repeated across every desk page.
+	//
+	// ?v=<n> is a manual cache-buster - browsers cache a plain <img src>
+	// indefinitely by URL, so swapping the file's content without changing
+	// this bumps nothing and people keep seeing the old picture until they
+	// hard-refresh (confirmed via testing: server file was correct, browser
+	// was just serving its cached copy). Bump this number every time
+	// alia_avatar.png's content actually changes.
 	var ALIA_AVATAR_HTML =
-		"<img src='/assets/arjun_chatbot/images/alia_avatar.png' alt='ALIA' class='hrbot-avatar-img'>";
+		"<img src='/assets/arjun_chatbot/images/alia_avatar.png?v=3' alt='ALIA' class='hrbot-avatar-img'>";
 
 	var SEND_ICON_SVG =
 		"<svg viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'>" +
