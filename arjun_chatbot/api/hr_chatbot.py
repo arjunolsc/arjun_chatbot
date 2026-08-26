@@ -32,6 +32,7 @@ import calendar
 import json
 import re
 from difflib import SequenceMatcher, get_close_matches
+from urllib.parse import quote
 
 import frappe
 from frappe import _
@@ -417,20 +418,44 @@ def _leave_taken(employee, message=None):
 
 
 def _leave_status(employee, message=None):
+	# Real gap caught by systematic testing: "have i taken leave last
+	# month" always showed the same "3 most recent" list regardless of
+	# what period was actually named - looked right by coincidence when
+	# the most recent requests happened to be in that month, but would
+	# mislead as soon as a more recent request existed in a different
+	# month. Now honours a named period the same way payslip/attendance
+	# already do, and still falls back to "3 most recent" for a bare
+	# "status of my leave request" with no period mentioned.
+	period = _extract_period(message or "")
+	filters = {"employee": employee}
+	label = None
+	if period:
+		month, year = period
+		year = year or _resolve_year("Leave Application", "from_date", employee, month)
+		start = getdate(f"{year}-{month:02d}-01")
+		end = get_last_day(start)
+		label = formatdate(start, "MMMM yyyy")
+		filters["from_date"] = ["<=", end]
+		filters["to_date"] = [">=", start]
+
 	rows = frappe.get_all(
 		"Leave Application",
-		filters={"employee": employee},
+		filters=filters,
 		fields=["leave_type", "from_date", "to_date", "status"],
 		order_by="creation desc",
-		limit=3,
+		limit=None if period else 3,
 	)
 	if not rows:
+		if period:
+			return _("You didn't apply for any leave in {0}.").format(label)
 		return _("You haven't applied for any leave yet.")
 
 	lines = [
 		_("{0}: {1} to {2} - {3}").format(r.leave_type, formatdate(r.from_date), formatdate(r.to_date), r.status)
 		for r in rows
 	]
+	if period:
+		return _("Your leave requests in {0}:").format(label) + "<br>" + "<br>".join(lines)
 	return _("Your recent leave requests:") + "<br>" + "<br>".join(lines)
 
 
@@ -522,12 +547,18 @@ def _payslip(employee, message=None):
 		return _("No payslip has been generated for you yet.")
 
 	r = rows[0]
+	# Salary Slip names can legally contain "/" (seen for real in this
+	# system's own test data) - building the link from the raw name
+	# without encoding it produces a broken URL (the "/" gets read as
+	# extra path segments instead of part of the docname). Caught by
+	# systematic testing, not something the earlier ad-hoc checks hit.
+	slip_url = "/app/salary-slip/" + quote(r.name, safe="")
 	if period:
-		return _("Your payslip for {0} ({1} to {2}): net pay {3}, status {4}. <a href='/app/salary-slip/{5}'>View it here</a>.").format(
-			label, formatdate(r.start_date), formatdate(r.end_date), fmt_money(r.net_pay), r.status, r.name
+		return _("Your payslip for {0} ({1} to {2}): net pay {3}, status {4}. <a href='{5}'>View it here</a>.").format(
+			label, formatdate(r.start_date), formatdate(r.end_date), fmt_money(r.net_pay), r.status, slip_url
 		)
-	return _("Your latest payslip ({0} to {1}): net pay {2}, status {3}. <a href='/app/salary-slip/{4}'>View it here</a>.").format(
-		formatdate(r.start_date), formatdate(r.end_date), fmt_money(r.net_pay), r.status, r.name
+	return _("Your latest payslip ({0} to {1}): net pay {2}, status {3}. <a href='{4}'>View it here</a>.").format(
+		formatdate(r.start_date), formatdate(r.end_date), fmt_money(r.net_pay), r.status, slip_url
 	)
 
 
