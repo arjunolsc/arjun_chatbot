@@ -318,6 +318,30 @@ def _extract_day(message):
 		d = getdate(nowdate())
 		return d.day, d.month, d.year
 
+	# Purely numeric dates - real gap caught by testing: "attendance on
+	# 05-06-2026" matched neither the month-name patterns below nor
+	# _extract_period, so it silently fell all the way back to "this
+	# month" with no indication anything was misread. DD-MM-YYYY is this
+	# app's own display convention (matches every formatdate() call in
+	# these replies), so that's the default read of an ambiguous d1-d2;
+	# if d1 can't be a valid day (>31) or d2 can't be a valid month (>12)
+	# with d1 being a valid month, it's read the other way around instead
+	# of just failing.
+	match = re.search(r"\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b", msg)
+	if not match:
+		match = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", msg)
+		if match:
+			year, d1, d2 = int(match.group(1)), int(match.group(2)), int(match.group(3))
+			return d2, d1, year
+	if match:
+		d1, d2, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+		if d1 > 31 or (d1 > 12 and d2 > 12):
+			pass  # neither reading is valid - fall through to month-name checks
+		elif d2 > 12 and d1 <= 12:
+			return d2, d1, year  # only valid as MM-DD-YYYY
+		else:
+			return d1, d2, year  # DD-MM-YYYY (or genuinely ambiguous - default day-first)
+
 	# The ordinal suffix is matched loosely ([a-z]{0,2}, not literally
 	# st/nd/rd/th) - "5ht august" (a real typo caught in testing, "ht"
 	# instead of "th") otherwise fails to match at all and silently falls
