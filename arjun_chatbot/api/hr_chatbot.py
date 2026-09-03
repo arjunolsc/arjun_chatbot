@@ -179,12 +179,27 @@ def _fuzzy_match(message):
 	still win. No AI involved - this is plain edit-distance matching
 	against a fixed vocabulary."""
 	best_entry, best_score, best_word_count, best_min_ratio = _fuzzy_score(message)
+	if _fuzzy_is_confident(best_entry, best_score, best_word_count, best_min_ratio, _FUZZY_ACCEPT_THRESHOLD):
+		return best_entry
+	return None
 
-	if best_entry is None or best_score < _FUZZY_ACCEPT_THRESHOLD:
-		return None
+
+def _fuzzy_is_confident(best_entry, best_score, best_word_count, best_min_ratio, threshold):
+	"""Shared trust check on a _fuzzy_score(...) result, used by both
+	_fuzzy_match (accept threshold) and the off-topic gate/suggestion
+	logic in ask() (the lower _FUZZY_SUGGEST_THRESHOLD) - NOT just the
+	score cutoff, but the same single-word-match guard _fuzzy_match always
+	applied. Without this guard, a callsite that only checked the score
+	would resurrect exactly the false positive this file already fixed
+	once: "president of India" scores a full 1.0 on "present" alone (a
+	single keyword unique to the attendance intent), but 0.875 similarity
+	to "president" isn't nearly close enough to trust when it's the only
+	matched word - see _FUZZY_SINGLE_MATCH_CUTOFF."""
+	if best_entry is None or best_score < threshold:
+		return False
 	if best_word_count == 1 and best_min_ratio < _FUZZY_SINGLE_MATCH_CUTOFF:
-		return None
-	return best_entry
+		return False
+	return True
 
 
 # Short descriptions for the AI fallback's system prompt - see
@@ -343,13 +358,17 @@ def ask(message: str) -> dict:
 	if fuzzy_entry:
 		return _dispatch(fuzzy_entry, message)
 
+	# One scoring pass, reused below by the topic gate, the unanswered-
+	# question log, and the near-miss suggestion - not recomputed by each.
+	best_entry, best_score, best_word_count, best_min_ratio = _fuzzy_score(message)
+
 	# Off-topic messages ("what's the capital of France") never reach the
 	# AI-classify call or the unanswered-question log below - see
 	# _looks_hr_related. They get a fixed redirect instead, so the gap
 	# log stays a clean signal of real missing HRMS features and the
 	# (rate-limited) Groq call isn't spent on things it was never going
 	# to classify as an HR intent anyway.
-	if not _looks_hr_related(message):
+	if not _looks_hr_related(message, best_entry, best_score, best_word_count, best_min_ratio):
 		return {"reply": _off_topic()}
 
 	ai_fallback_enabled = bool(frappe.get_cached_doc("HR Chatbot Settings").get("enable_ai_fallback"))
@@ -357,14 +376,15 @@ def ask(message: str) -> dict:
 	if ai_entry:
 		return _dispatch(ai_entry, message)
 
-	best_entry, best_score, _word_count, _min_ratio = _fuzzy_score(message)
 	_log_unanswered(message, ai_fallback_attempted=ai_fallback_enabled, best_entry=best_entry, best_score=best_score)
 
 	# Weak-but-not-nothing near-miss: name the closest guess instead of
-	# the generic help list. Still HR-related only, same as everything
-	# above - this whole branch only runs after the _looks_hr_related
-	# gate already passed.
-	if best_entry is not None and best_score >= _FUZZY_SUGGEST_THRESHOLD:
+	# the generic help list. Same confidence guard as _fuzzy_match's own
+	# accept check (just at the lower suggest threshold) - a bare score
+	# check here would suggest wrong-but-official-sounding guesses for
+	# the same single-word coincidences _fuzzy_is_confident exists to
+	# catch (see its docstring).
+	if _fuzzy_is_confident(best_entry, best_score, best_word_count, best_min_ratio, _FUZZY_SUGGEST_THRESHOLD):
 		return {"reply": _suggest_reply(best_entry)}
 
 	return {"reply": _help()}
@@ -1334,19 +1354,28 @@ _HR_TOPIC_WORDS = {
 }
 
 
-def _looks_hr_related(message):
+def _looks_hr_related(message, best_entry, best_score, best_word_count, best_min_ratio):
 	"""Cheap local gate, zero cost and no AI call: does this message
 	contain at least one word from the broad HR vocabulary above, or does
-	it at least fuzzy-resemble one of the specific intent keywords (a
-	near-miss on "leave" is still clearly HR-flavored even if too weak to
-	confidently pick an intent)? Used to decide whether an unmatched
-	message is a real product gap worth an AI-classify call and a log
-	entry, or just off-topic chatter worth a fixed redirect instead."""
+	it at least fuzzy-resemble one of the specific intent keywords closely
+	enough to trust (a near-miss on "leave" is still clearly HR-flavored
+	even if too weak to confidently pick an intent)? Used to decide
+	whether an unmatched message is a real product gap worth an
+	AI-classify call and a log entry, or just off-topic chatter worth a
+	fixed redirect instead.
+
+	Takes an already-computed _fuzzy_score(message) result rather than
+	calling it again - the caller (ask()) needs that same result for
+	logging/suggestion right after this gate passes, so scoring only runs
+	once per message. Reuses _fuzzy_is_confident (the same single-word-
+	match guard _fuzzy_match applies) rather than a bare score check - a
+	bare check would wrongly wave through "president of India" as
+	HR-related purely because "president" resembles the attendance
+	keyword "present"; see _fuzzy_is_confident's docstring."""
 	words = set(re.findall(r"[a-z]+", message.lower()))
 	if words & _HR_TOPIC_WORDS:
 		return True
-	best_entry, _score, _wc, _ratio = _fuzzy_score(message)
-	return best_entry is not None
+	return _fuzzy_is_confident(best_entry, best_score, best_word_count, best_min_ratio, _FUZZY_SUGGEST_THRESHOLD)
 
 
 def _off_topic():
