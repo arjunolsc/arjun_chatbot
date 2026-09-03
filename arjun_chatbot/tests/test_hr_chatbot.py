@@ -113,6 +113,45 @@ class TestHRChatbotRouting(FrappeTestCase):
 			_route("is there a gym membership discount for company staff"), "__off_topic__"
 		)
 
+	# ---- Hinglish (Latin-script transliterated Hindi) ----
+	# See the scoping note above INTENTS in hr_chatbot.py for why this is
+	# a small, deliberately narrow set rather than a general translation
+	# layer.
+
+	def test_hinglish_phrasings(self):
+		cases = {
+			"chutti kitni bachi hai": "leave_balance",
+			"chutti kaise le": "apply_leave",
+			"meri hazri kitni hai": "attendance",
+			"meri tankhwah kitni hai": "salary_breakup",
+			"meri tankhwah dikhao": "payslip",
+			"istifa dena hai": "resignation",
+			"kharcha claim karna hai": "expense_claim",
+			"bank khata number kya hai": "bank_details",
+		}
+		for message, expected_key in cases.items():
+			with self.subTest(message=message):
+				self.assertEqual(_route(message), expected_key)
+
+	def test_namaste_and_dhanyawad_are_greeting_and_thanks(self):
+		# Greeting/thanks have key=None - the assertion is just that they
+		# dispatch cleanly (not None-vs-something-else routing confusion,
+		# not an unmatched fallthrough to off-topic/help).
+		captured = {}
+
+		def fake_dispatch(entry, msg):
+			captured["called"] = True
+			return {"reply": "x"}
+
+		with patch.object(hr_chatbot, "_dispatch", side_effect=fake_dispatch):
+			hr_chatbot.ask("namaste")
+		self.assertTrue(captured.get("called"))
+
+		captured.clear()
+		with patch.object(hr_chatbot, "_dispatch", side_effect=fake_dispatch):
+			hr_chatbot.ask("dhanyawad")
+		self.assertTrue(captured.get("called"))
+
 	# ---- regex layer spot-checks (a sample across the 28 intents, not
 	# exhaustive - this is a smoke test that the dispatch table itself
 	# still wires up correctly, not a full behavioral spec) ----

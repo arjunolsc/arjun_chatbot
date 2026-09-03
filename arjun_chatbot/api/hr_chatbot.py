@@ -1491,6 +1491,24 @@ def _help(*args):
 # stable name the optional AI fallback classifies into (see _ai_classify) -
 # also excluded for greeting/thanks/help, no point spending an API call to
 # learn someone said "hi".
+#
+# Hinglish support (Latin-script transliterated Hindi, e.g. "chutti kitni
+# bachi hai") is scoped deliberately narrow: only a handful of the
+# highest-traffic intents got Hindi synonyms added, and only in Latin
+# script - not native Devanagari, which would need a Unicode-aware word
+# regex in _fuzzy_score (currently [a-zA-Z]+) and doubling every keyword
+# list into a second script. Real Hinglish HR chat also routinely keeps
+# the English domain word as-is ("leave balance kitna hai" mixes both),
+# so most of the value here is a small set of colloquial nouns that
+# genuinely do get swapped for Hindi (chutti=leave, hazri=attendance,
+# tankhwah=salary, istifa=resignation, kharcha=expense) - not a general
+# translation layer. Generic Hindi question/grammar words (kitna/kitne/
+# kab/kaise/mera) are deliberately never added as standalone fuzzy
+# keywords, same reasoning as excluding English "type" below - they're
+# shared across too many intents to be a trustworthy signal alone, so
+# they only appear inside specific regex phrases. Whatever this misses
+# will show up in HR Chatbot Unanswered Query for a real, data-driven
+# next pass instead of guessing further phrasings up front.
 def _entry(key, pattern, handler, needs_employee, keywords=None):
 	return {
 		"key": key,
@@ -1502,43 +1520,116 @@ def _entry(key, pattern, handler, needs_employee, keywords=None):
 
 
 INTENTS = [
-	_entry(None, r"^\s*(hi+|hello+|hey+|good (morning|afternoon|evening))\b", _greeting, False),
-	_entry(None, r"^\s*(thanks|thank you|thx|ty)\b", _thanks, False),
-	_entry("leave_balance", r"leave.*balance|balance.*leave|how many leave", _leave_balance, True, ["leave", "balance", "many", "left", "remaining"]),
-	_entry("apply_leave", r"apply.*leave|leave.*apply|(how|new|fill|raise|create).*leave.*application", _apply_leave, False, ["apply", "leave", "application", "new"]),
+	_entry(None, r"^\s*(hi+|hello+|hey+|good (morning|afternoon|evening)|namaste+|namaskar)\b", _greeting, False),
+	_entry(None, r"^\s*(thanks|thank you|thx|ty|dhanyawad|shukriya)\b", _thanks, False),
+	# "chutti"/"chhutti" (spelled either way) is the everyday Hinglish word
+	# for "leave" - Indian employees typing a chat message routinely mix
+	# it with the English domain terms rather than translating the whole
+	# sentence (e.g. "chutti balance kitna hai"), so it's added as a
+	# straight synonym for "leave" everywhere "leave" already appears in
+	# this leave-family group of intents, both in the regex and the fuzzy
+	# keyword list - same sharing/dilution the plain English "leave"
+	# keyword already has across these four intents (see _fuzzy_score's
+	# weighting). Deliberately Latin-script (Hinglish) only, not
+	# Devanagari - see the module-level scoping note above INTENTS.
+	_entry(
+		"leave_balance",
+		r"leave.*balance|balance.*leave|how many leave|chutt?i.*(bachi|bache|bacha)|kitn[ei].*chutt?i|chutt?i.*kitn[ei]",
+		_leave_balance,
+		True,
+		["leave", "chutti", "chhutti", "balance", "many", "left", "remaining"],
+	),
+	_entry(
+		"apply_leave",
+		r"apply.*leave|leave.*apply|(how|new|fill|raise|create).*leave.*application"
+		r"|chutt?i (kaise|kese) (le|milegi|apply)|leave (kaise|kese) (le|apply)|naya leave",
+		_apply_leave,
+		False,
+		["apply", "leave", "chutti", "chhutti", "application", "new"],
+	),
 	# "type"/"types" deliberately excluded from the fuzzy keyword list - a
 	# real bug found by testing: "what's my blood TYPE on file" fuzzy-
 	# matched on the single word "type" (an exact, if generic, match) and
 	# confidently won over personal_details. "type" alone is too common an
 	# English word to trust as a standalone signal; "leave"/"policy" still
 	# catch genuine typos of this intent without that false-positive risk.
-	_entry("leave_types_policy", r"leave (type|polic)|types? of leave|what leaves", _leave_types_policy, False, ["leave", "policy", "policies"]),
-	_entry("leave_status", r"leave.*(status|request|application)", _leave_status, True, ["leave", "status", "request", "application"]),
+	_entry(
+		"leave_types_policy",
+		r"leave (type|polic)|types? of leave|what leaves|chutt?i (ke types|k[ei] policy|ki policy)",
+		_leave_types_policy,
+		False,
+		["leave", "chutti", "chhutti", "policy", "policies"],
+	),
+	_entry(
+		"leave_status",
+		r"leave.*(status|request|application)|chutt?i.*(status|manzoor|approve)",
+		_leave_status,
+		True,
+		["leave", "chutti", "chhutti", "status", "request", "application"],
+	),
 	# Deliberately excludes "attendance" from its own keyword list - it's
 	# shared with the plain _attendance lookup below, and would win fuzzy
 	# ties for any typo'd "attendance" even without "regularize"/"correct"
 	# present (this misfired on "atendance this month" during testing).
 	_entry("attendance_regularize", r"regulari.*attendance|attendance.*regulari|correct.*attendance|attendance.*request", _attendance_regularize, False, ["regularize", "regularise", "correct"]),
-	_entry("attendance", r"attendance|present|absent", _attendance, True, ["attendance", "present", "absent"]),
+	# "hazri"/"hajri" (both spellings seen in real usage) is the everyday
+	# Hinglish word for attendance - fairly unambiguous on its own, unlike
+	# "chutti" above, so it's a safe standalone keyword.
+	_entry(
+		"attendance",
+		r"attendance|present|absent|\bhazri\b|\bhajri\b",
+		_attendance,
+		True,
+		["attendance", "present", "absent", "hazri", "hajri"],
+	),
 	# Checked before payslip - "my salary account" (a real, common Indian
 	# usage meaning "which bank account my salary goes to") would otherwise
-	# be caught by payslip's bare "my salary" pattern below.
-	_entry("bank_details", r"bank (details|account|name)|salary account|account number|which bank|\bifsc\b", _bank_details, True, ["bank", "ifsc"]),
+	# be caught by payslip's bare "my salary" pattern below. "khata" is the
+	# Hinglish word for (bank) account.
+	_entry(
+		"bank_details",
+		r"bank (details|account|name)|salary account|account number|which bank|\bifsc\b|bank khata|khata number",
+		_bank_details,
+		True,
+		["bank", "ifsc", "khata"],
+	),
 	# Checked before payslip too - "what's my ctc"/"gross salary"/"net
 	# salary" are about the compensation summary on the Employee record
-	# itself, not a specific month's Salary Slip.
-	_entry("salary_breakup", r"\bctc\b|gross salary|net salary|take.?home|total (deduct|allow|benefit)", _salary_breakup, True, ["ctc"]),
-	_entry("payslip", r"pay ?slip|salary slip|my salary", _payslip, True, ["payslip", "salary", "slip"]),
+	# itself, not a specific month's Salary Slip. "tankhwah" is the
+	# everyday Hinglish word for salary - shared with payslip below the
+	# same way the English "salary" keyword already is.
+	_entry(
+		"salary_breakup",
+		r"\bctc\b|gross salary|net salary|take.?home|total (deduct|allow|benefit)|tankhwah (kitni|breakup|kitna)",
+		_salary_breakup,
+		True,
+		["ctc", "tankhwah"],
+	),
+	_entry(
+		"payslip",
+		r"pay ?slip|salary slip|my salary|meri salary|meri tankhwah",
+		_payslip,
+		True,
+		["payslip", "salary", "tankhwah", "slip"],
+	),
 	_entry("comp_off", r"comp ?off|compensatory", _comp_off, True, ["comp", "compensatory"]),
-	_entry("expense_claim", r"expense claim|reimbursement", _expense_claim, True, ["expense", "claim", "reimbursement"]),
+	# "kharcha" is the everyday Hinglish word for expense.
+	_entry(
+		"expense_claim",
+		r"expense claim|reimbursement|kharcha (wapas|claim)|paisa wapas",
+		_expense_claim,
+		True,
+		["expense", "claim", "reimbursement", "kharcha"],
+	),
 	_entry("onboarding_docs", r"onboarding|document.*upload|upload.*document", _onboarding_docs, False, ["onboarding", "document", "documents", "upload"]),
 	_entry("notice_period", r"notice period|notice days", _notice_period, True, ["notice", "period", "days"]),
+	# "istifa" is the everyday Hinglish word for resignation.
 	_entry(
 		"resignation",
-		r"resign|resignation|quit\b|exit (the )?company|leave (the )?(company|job|organi[sz]ation)",
+		r"resign|resignation|quit\b|exit (the )?company|leave (the )?(company|job|organi[sz]ation)|\bistifa\b",
 		_resignation,
 		True,
-		["resign", "resignation", "quit"],
+		["resign", "resignation", "quit", "istifa"],
 	),
 	# Checked before my_contact_info - "who is my emergency contact" would
 	# otherwise be ambiguous with a generic contact-details query.
