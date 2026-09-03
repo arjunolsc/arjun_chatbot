@@ -1219,18 +1219,18 @@ def _leave_types_policy():
 
 def _apply_leave():
 	return _(
-		"To apply for leave: use the search bar at the top and type "
-		"\"New Leave Application\". Fill in the leave type, dates and reason, "
+		"To apply for leave: <a href='/app/leave-application/new'>open a new "
+		"Leave Application</a>. Fill in the leave type, dates and reason, "
 		"then submit - it routes to your reporting manager for approval."
 	)
 
 
 def _attendance_regularize():
 	return _(
-		"To fix a missed or wrong attendance entry: use the search bar at "
-		"the top and type \"New Attendance Request\". Fill in the date range "
-		"and reason, then submit - it goes to your reporting manager for "
-		"approval."
+		"To fix a missed or wrong attendance entry: <a "
+		"href='/app/attendance-request/new'>open a new Attendance "
+		"Request</a>. Fill in the date range and reason, then submit - it "
+		"goes to your reporting manager for approval."
 	)
 
 
@@ -1257,9 +1257,10 @@ def _comp_off(employee, message=None):
 		return _("You've taken Comp Off on:") + "<br>" + "<br>".join(lines)
 
 	return _(
-		"To claim compensatory off for working a holiday/weekend: use the "
-		"search bar at the top and type \"New Compensatory Leave Request\". "
-		"Once approved, it's added to your Comp Off balance."
+		"To claim compensatory off for working a holiday/weekend: <a "
+		"href='/app/compensatory-leave-request/new'>open a new "
+		"Compensatory Leave Request</a>. Once approved, it's added to your "
+		"Comp Off balance."
 	)
 
 
@@ -1283,8 +1284,8 @@ def _expense_claim(employee, message=None):
 		return _("Your recent expense claims:") + "<br>" + "<br>".join(lines)
 
 	return _(
-		"To raise a reimbursement: use the search bar at the top and type "
-		"\"New Expense Claim\". Add the expense items and attach receipts, "
+		"To raise a reimbursement: <a href='/app/expense-claim/new'>open a "
+		"new Expense Claim</a>. Add the expense items and attach receipts, "
 		"then submit for approval."
 	)
 
