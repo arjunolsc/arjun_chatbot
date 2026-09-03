@@ -62,6 +62,12 @@ _FUZZY_ACCEPT_THRESHOLD = 1.0
 # count at all - "president" vs "present" is 0.875, well past the normal
 # 0.75 cutoff, and was a real false positive (see _fuzzy_match).
 _FUZZY_SINGLE_MATCH_CUTOFF = 0.90
+# A near-miss below _FUZZY_ACCEPT_THRESHOLD is still worth surfacing as a
+# "did you mean" suggestion once it clears this much lower bar - below it,
+# the signal is too weak (e.g. one generic shared word) to name a specific
+# intent without risking a confusing, wrong-sounding guess. See
+# _suggest_reply.
+_FUZZY_SUGGEST_THRESHOLD = 0.5
 
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_TIMEOUT = 6
@@ -117,33 +123,23 @@ def _keyword_intent_count():
 	return _keyword_intent_count_cache
 
 
-def _fuzzy_match(message):
-	"""Typo-tolerant fallback for when no regex intent matched cleanly -
-	e.g. "how mnay leaves left" (typo for "many"). Scores each intent by
-	its keyword matches, weighted DOWN for words shared across many
-	intents - a bare "leave" alone is too weak a signal to confidently
-	pick between leave_balance/apply_leave/leave_status/leave_types_policy,
-	so it can't win on its own (caught by real testing: "have i taken
-	leave last month" was wrongly resolving to leave_balance just because
-	both share the word "leave"). Requires a minimum combined score to
-	accept a match at all - weak/ambiguous messages fall through to the AI
-	layer (or the help text) instead of confidently guessing wrong.
+def _fuzzy_score(message):
+	"""Shared scoring pass used by both `_fuzzy_match` (below) and the
+	unanswered-query logger in `ask()`. Scores each intent by its keyword
+	matches, weighted DOWN for words shared across many intents - a bare
+	"leave" alone is too weak a signal to confidently pick between
+	leave_balance/apply_leave/leave_status/leave_types_policy, so it can't
+	win on its own (caught by real testing: "have i taken leave last
+	month" was wrongly resolving to leave_balance just because both share
+	the word "leave").
 
-	A single matching word is extra risky: "president" vs the keyword
-	"present" scores 0.875 - well past the normal cutoff, and a real bug
-	caught by testing ("president of India" was answered with attendance
-	data). Genuine unrelated words can coincidentally look a lot like a
-	keyword; two independent words both pointing the same way is much
-	stronger corroboration than one. So a single-word match must be a much
-	closer, near-exact-typo ratio to be trusted at all - see
-	_FUZZY_SINGLE_MATCH_CUTOFF.
-
-	Ties broken by INTENTS order, so more specific intents listed earlier
-	still win. No AI involved - this is plain edit-distance matching
-	against a fixed vocabulary."""
+	Returns (best_entry, best_score, best_word_count, best_min_ratio) -
+	best_entry is None if the message had no words long enough to score at
+	all. Callers decide what to do with a weak score; this function only
+	measures it."""
 	words = [w for w in re.findall(r"[a-zA-Z]+", message.lower()) if len(w) >= _FUZZY_MIN_WORD_LEN]
 	if not words:
-		return None
+		return None, 0.0, 0, 0.0
 
 	keyword_counts = _keyword_intent_count()
 	best_entry, best_score, best_word_count, best_min_ratio = None, 0.0, 0, 0.0
@@ -160,11 +156,71 @@ def _fuzzy_match(message):
 		if score > best_score:
 			best_entry, best_score, best_word_count, best_min_ratio = entry, score, matched_words, min_ratio
 
+	return best_entry, best_score, best_word_count, best_min_ratio
+
+
+def _fuzzy_match(message):
+	"""Typo-tolerant fallback for when no regex intent matched cleanly -
+	e.g. "how mnay leaves left" (typo for "many"). Requires a minimum
+	combined score (from `_fuzzy_score`) to accept a match at all -
+	weak/ambiguous messages fall through to the AI layer (or the help
+	text) instead of confidently guessing wrong.
+
+	A single matching word is extra risky: "president" vs the keyword
+	"present" scores 0.875 - well past the normal cutoff, and a real bug
+	caught by testing ("president of India" was answered with attendance
+	data). Genuine unrelated words can coincidentally look a lot like a
+	keyword; two independent words both pointing the same way is much
+	stronger corroboration than one. So a single-word match must be a much
+	closer, near-exact-typo ratio to be trusted at all - see
+	_FUZZY_SINGLE_MATCH_CUTOFF.
+
+	Ties broken by INTENTS order, so more specific intents listed earlier
+	still win. No AI involved - this is plain edit-distance matching
+	against a fixed vocabulary."""
+	best_entry, best_score, best_word_count, best_min_ratio = _fuzzy_score(message)
+
 	if best_entry is None or best_score < _FUZZY_ACCEPT_THRESHOLD:
 		return None
 	if best_word_count == 1 and best_min_ratio < _FUZZY_SINGLE_MATCH_CUTOFF:
 		return None
 	return best_entry
+
+
+# Short descriptions for the AI fallback's system prompt - see
+# _ai_classify. Bare intent key names alone weren't enough context for
+# the model, confirmed by real misclassifications in testing.
+_INTENT_DESCRIPTIONS = {
+	"leave_balance": "how many leave days remain, or how many have been taken/used",
+	"apply_leave": "how-to: the steps to apply for/request leave",
+	"leave_types_policy": "what leave types exist and their policy (max days, carry-forward)",
+	"leave_status": "status/approval of recent leave applications",
+	"attendance_regularize": "how-to: fixing a missed or incorrect attendance entry",
+	"attendance": "actual attendance record (present/absent) for a period or a specific day",
+	"bank_details": "salary bank account number, IFSC, bank name on file",
+	"salary_breakup": "CTC, gross/net salary, total deductions/allowances/benefits",
+	"payslip": "a specific month's or the latest Salary Slip document",
+	"comp_off": "how-to: claiming compensatory off, or when comp off was taken",
+	"expense_claim": "how-to: filing a reimbursement, or the status of filed expense claims",
+	"onboarding_docs": "how new candidates (not existing employees) upload onboarding documents",
+	"notice_period": "number of notice days required to resign",
+	"resignation": "how-to: resigning/quitting/leaving the company",
+	"emergency_contact": "emergency contact name/phone on file",
+	"my_contact_info": "mobile number, personal/company email, or address on file",
+	"probation_status": "probation/confirmation status and date",
+	"contract_end": "contract end date",
+	"approvers": "who approves leave, expense, or shift requests",
+	"my_shift": "assigned work shift/timing",
+	"weekly_off": "which day of the week is the off day",
+	"statutory_ids": "PAN, UAN, PF account, Aadhaar, or ESIC number on file",
+	"my_profile": "designation, department, employee number, name, or date of joining",
+	"education": "education/qualifications on file",
+	"work_history": "previous employers/work history on file",
+	"passport_details": "passport number, validity, or issue details",
+	"personal_details": "marital status, blood group, or health insurance on file",
+	"holiday": "the next upcoming holiday",
+	"manager": "who the employee reports to",
+}
 
 
 def _ai_classify(message):
@@ -183,10 +239,18 @@ def _ai_classify(message):
 	if not api_key:
 		return None
 
-	valid_keys = list(INTENTS_BY_KEY.keys())
+	# Descriptions, not just bare key names - a systematic test pass found
+	# real misclassifications from this (e.g. "which account does my salary
+	# go to" -> payslip instead of bank_details, "I forgot to mark
+	# attendance, what do I do" -> attendance instead of
+	# attendance_regularize) because the model had nothing but a snake_case
+	# name to guess meaning from.
+	intent_lines = "\n".join(
+		"- {0}: {1}".format(key, _INTENT_DESCRIPTIONS.get(key, key)) for key in INTENTS_BY_KEY
+	)
 	system_prompt = (
 		"You classify a short HR-system question into exactly one of these "
-		"intent names, or null if none fit: " + ", ".join(valid_keys) + ". "
+		"intents, or null if none fit:\n" + intent_lines + "\n\n"
 		"Reply with ONLY a JSON object like {\"intent\": \"leave_balance\"} or "
 		"{\"intent\": null}. No other text."
 	)
@@ -226,6 +290,45 @@ def _ai_classify(message):
 	return INTENTS_BY_KEY.get(intent_key)
 
 
+def _log_unanswered(message, ai_fallback_attempted, best_entry, best_score):
+	"""Record a question none of the three matching layers could resolve,
+	so real usage gaps show up in HR Chatbot Unanswered Query instead of
+	silently disappearing into the generic help text. Never blocks or
+	fails the reply - logging is best-effort, same defensive style as
+	_dispatch/_ai_classify above. best_entry/best_score come from the
+	caller's own _fuzzy_score call, so the scoring pass only runs once
+	per message rather than once per consumer."""
+	try:
+		frappe.get_doc(
+			{
+				"doctype": "HR Chatbot Unanswered Query",
+				"question": message,
+				"user": frappe.session.user,
+				"employee": _current_employee(),
+				"ai_fallback_attempted": ai_fallback_attempted,
+				"best_fuzzy_guess": best_entry["key"] if best_entry else None,
+				"best_fuzzy_score": best_score,
+			}
+		).insert(ignore_permissions=True)
+	except Exception:
+		frappe.log_error(title="HR chatbot unanswered-query logging failed")
+
+
+def _suggest_reply(entry):
+	"""Near-miss reply: the fuzzy scorer found something plausible (see
+	_FUZZY_SUGGEST_THRESHOLD) but not confident enough to answer outright
+	(see _FUZZY_ACCEPT_THRESHOLD in _fuzzy_match). Naming the closest
+	guess, rather than falling straight to the generic help list, gives
+	the user a fast way to confirm/rephrase instead of hunting through
+	the full capability list themselves."""
+	description = _INTENT_DESCRIPTIONS.get(entry["key"], entry["key"])
+	return _(
+		'I\'m not fully sure I understood that - it sounds like it might be '
+		"about: {0}. Try rephrasing more directly, or type \"help\" to see "
+		"everything I can answer."
+	).format(description)
+
+
 @frappe.whitelist()
 def ask(message: str) -> dict:
 	message = (message or "").strip()
@@ -240,9 +343,29 @@ def ask(message: str) -> dict:
 	if fuzzy_entry:
 		return _dispatch(fuzzy_entry, message)
 
-	ai_entry = _ai_classify(message)
+	# Off-topic messages ("what's the capital of France") never reach the
+	# AI-classify call or the unanswered-question log below - see
+	# _looks_hr_related. They get a fixed redirect instead, so the gap
+	# log stays a clean signal of real missing HRMS features and the
+	# (rate-limited) Groq call isn't spent on things it was never going
+	# to classify as an HR intent anyway.
+	if not _looks_hr_related(message):
+		return {"reply": _off_topic()}
+
+	ai_fallback_enabled = bool(frappe.get_cached_doc("HR Chatbot Settings").get("enable_ai_fallback"))
+	ai_entry = _ai_classify(message) if ai_fallback_enabled else None
 	if ai_entry:
 		return _dispatch(ai_entry, message)
+
+	best_entry, best_score, _word_count, _min_ratio = _fuzzy_score(message)
+	_log_unanswered(message, ai_fallback_attempted=ai_fallback_enabled, best_entry=best_entry, best_score=best_score)
+
+	# Weak-but-not-nothing near-miss: name the closest guess instead of
+	# the generic help list. Still HR-related only, same as everything
+	# above - this whole branch only runs after the _looks_hr_related
+	# gate already passed.
+	if best_entry is not None and best_score >= _FUZZY_SUGGEST_THRESHOLD:
+		return {"reply": _suggest_reply(best_entry)}
 
 	return {"reply": _help()}
 
@@ -1188,6 +1311,51 @@ def _thanks():
 	return _("You're welcome! Let me know if there's anything else I can help with.")
 
 
+# Broad HR/work vocabulary used only to gate whether a message is worth
+# spending an AI-classify call on and logging as a real product gap -
+# deliberately much wider than any single intent's keyword list above
+# (those are for *picking which* intent; this is for "is this even about
+# HR at all"). A message matching none of these is almost certainly
+# off-topic chit-chat ("what's the capital of France"), not a missing
+# HRMS feature - so it gets a fixed redirect instead of burning an AI
+# call or polluting the unanswered-question log with noise.
+_HR_TOPIC_WORDS = {
+	"hr", "hrms", "leave", "attendance", "present", "absent", "salary", "pay", "payslip",
+	"payroll", "ctc", "bank", "ifsc", "employee", "employer", "manager", "reporting",
+	"department", "designation", "onboarding", "resign", "resignation", "notice",
+	"contract", "probation", "confirmation", "passport", "education", "qualification",
+	"appraisal", "performance", "expense", "claim", "reimbursement", "comp", "compensatory",
+	"holiday", "shift", "pan", "uan", "aadhaar", "esic", "provident", "pf", "tax", "tds",
+	"benefit", "bonus", "increment", "promotion", "training", "policy", "policies",
+	"office", "job", "company", "staff", "joining", "exit", "relieving", "insurance",
+	"marital", "emergency", "profile", "mobile", "address", "approver", "approval",
+	"team", "colleague", "wfh", "remote", "regularize", "regularise", "worked",
+}
+
+
+def _looks_hr_related(message):
+	"""Cheap local gate, zero cost and no AI call: does this message
+	contain at least one word from the broad HR vocabulary above, or does
+	it at least fuzzy-resemble one of the specific intent keywords (a
+	near-miss on "leave" is still clearly HR-flavored even if too weak to
+	confidently pick an intent)? Used to decide whether an unmatched
+	message is a real product gap worth an AI-classify call and a log
+	entry, or just off-topic chatter worth a fixed redirect instead."""
+	words = set(re.findall(r"[a-z]+", message.lower()))
+	if words & _HR_TOPIC_WORDS:
+		return True
+	best_entry, _score, _wc, _ratio = _fuzzy_score(message)
+	return best_entry is not None
+
+
+def _off_topic():
+	return _(
+		"I'm the HR assistant here, so I can only help with HR/HRMS "
+		"questions - leave, attendance, payslips, policies and the like. "
+		"Type \"help\" to see what I can answer."
+	)
+
+
 def _help(*args):
 	return _(
 		"I can answer things like:<br>"
@@ -1241,7 +1409,13 @@ INTENTS = [
 	_entry(None, r"^\s*(thanks|thank you|thx|ty)\b", _thanks, False),
 	_entry("leave_balance", r"leave.*balance|balance.*leave|how many leave", _leave_balance, True, ["leave", "balance", "many", "left", "remaining"]),
 	_entry("apply_leave", r"apply.*leave|leave.*apply|(how|new|fill|raise|create).*leave.*application", _apply_leave, False, ["apply", "leave", "application", "new"]),
-	_entry("leave_types_policy", r"leave (type|polic)|types? of leave|what leaves", _leave_types_policy, False, ["leave", "type", "types", "policy", "policies"]),
+	# "type"/"types" deliberately excluded from the fuzzy keyword list - a
+	# real bug found by testing: "what's my blood TYPE on file" fuzzy-
+	# matched on the single word "type" (an exact, if generic, match) and
+	# confidently won over personal_details. "type" alone is too common an
+	# English word to trust as a standalone signal; "leave"/"policy" still
+	# catch genuine typos of this intent without that false-positive risk.
+	_entry("leave_types_policy", r"leave (type|polic)|types? of leave|what leaves", _leave_types_policy, False, ["leave", "policy", "policies"]),
 	_entry("leave_status", r"leave.*(status|request|application)", _leave_status, True, ["leave", "status", "request", "application"]),
 	# Deliberately excludes "attendance" from its own keyword list - it's
 	# shared with the plain _attendance lookup below, and would win fuzzy
