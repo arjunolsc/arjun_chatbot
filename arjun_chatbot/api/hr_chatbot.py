@@ -72,6 +72,22 @@ _FUZZY_SUGGEST_THRESHOLD = 0.5
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_TIMEOUT = 6
 
+# Intents whose handlers parse a time period out of the message itself
+# (_extract_period/_extract_day - see their call sites in _leave_taken,
+# _leave_status, _attendance, _payslip). These are the only intents worth
+# "remembering" for a one-step follow-up: a bare "what about last month?"
+# right after one of these is unambiguous once you know which of them was
+# just asked - the same bare message after, say, bank_details has no such
+# reading, so it's deliberately not a general "remember any intent"
+# mechanism. See _remember_intent/_recall_intent and the follow-up check
+# in ask().
+_FOLLOWUP_CAPABLE_INTENTS = {"leave_balance", "leave_status", "attendance", "payslip"}
+# How long a "what was I just asking about" hint survives - long enough
+# for a real back-and-forth, short enough that a user who left and came
+# back hours later starts fresh instead of a stale intent leaking into an
+# unrelated new question.
+_FOLLOWUP_MEMORY_TTL_SECONDS = 10 * 60
+
 
 def _current_employee():
 	"""The active Employee record linked to the logged-in user, or None.
@@ -85,6 +101,8 @@ def _current_employee():
 
 
 def _dispatch(entry, message):
+	_remember_intent(entry["key"])
+
 	handler, needs_employee = entry["handler"], entry["needs_employee"]
 	if not needs_employee:
 		return {"reply": handler()}
@@ -102,6 +120,40 @@ def _dispatch(entry, message):
 	except Exception:
 		frappe.log_error(title="HR chatbot handler failed")
 		return {"reply": _("Something went wrong looking that up. Please try again or ask HR directly.")}
+
+
+def _last_intent_cache_key():
+	return f"hr_chatbot_last_intent:{frappe.session.user}"
+
+
+def _remember_intent(key):
+	"""Called on every dispatch (see _dispatch above); only actually
+	stores anything for the handful of period-aware intents - see
+	_FOLLOWUP_CAPABLE_INTENTS. Per-user, not per-conversation: this app
+	has no session/thread concept beyond "the logged-in user", which is
+	consistent with everything else here reading straight off
+	frappe.session.user."""
+	if key in _FOLLOWUP_CAPABLE_INTENTS:
+		frappe.cache().set_value(_last_intent_cache_key(), key, expires_in_sec=_FOLLOWUP_MEMORY_TTL_SECONDS)
+
+
+def _recall_intent():
+	"""The INTENTS entry the user was last dispatched to, if it was one of
+	the follow-up-capable ones and the memory hasn't expired - see
+	_FOLLOWUP_MEMORY_TTL_SECONDS. None otherwise (nothing remembered, or
+	the last dispatch wasn't a period-aware intent).
+
+	expires=True is load-bearing, not decorative: _remember_intent writes
+	with expires_in_sec, and frappe.cache().get_value's default
+	(expires=False) caches whatever it reads - including a "not found"
+	None - into frappe.local's in-process cache and keeps returning that
+	stale value for the rest of the request/process, never checking Redis
+	again, even after _remember_intent writes a real value afterwards.
+	expires=True skips that local caching entirely, so this always reads
+	Redis directly. A real bug found by testing this feature, not a
+	guess - see frappe/utils/redis_wrapper.py's get_value."""
+	key = frappe.cache().get_value(_last_intent_cache_key(), expires=True)
+	return INTENTS_BY_KEY.get(key) if key in _FOLLOWUP_CAPABLE_INTENTS else None
 
 
 _keyword_intent_count_cache = None
@@ -357,6 +409,21 @@ def ask(message: str) -> dict:
 	fuzzy_entry = _fuzzy_match(message)
 	if fuzzy_entry:
 		return _dispatch(fuzzy_entry, message)
+
+	# One-step follow-up memory: a bare "what about last month?" right
+	# after asking about attendance/leave/payslip names a period but no
+	# intent of its own, and would otherwise fall straight through to the
+	# off-topic gate below (a period phrase has none of the HR keywords
+	# that gate looks for). Only kicks in when the message actually names
+	# a period AND the last thing dispatched was one of the handful of
+	# period-aware intents within the memory window - see
+	# _FOLLOWUP_CAPABLE_INTENTS/_recall_intent. A message that already
+	# matched something above never reaches here, so this never overrides
+	# a real, self-sufficient match.
+	if _extract_period(message) or _extract_day(message):
+		followup_entry = _recall_intent()
+		if followup_entry:
+			return _dispatch(followup_entry, message)
 
 	# One scoring pass, reused below by the topic gate, the unanswered-
 	# question log, and the near-miss suggestion - not recomputed by each.

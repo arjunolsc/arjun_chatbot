@@ -191,3 +191,87 @@ class TestUnansweredQueryLogging(FrappeTestCase):
 		self.assertEqual(row.question, "is there a gym membership discount for company staff")
 		self.assertEqual(row.user, "Administrator")
 		self.assertEqual(row.ai_fallback_attempted, 0)
+
+
+class TestFollowUpMemory(FrappeTestCase):
+	"""_remember_intent/_recall_intent and the bare-period follow-up
+	branch in ask(). Cache is Redis-backed, not DB-backed, so
+	FrappeTestCase's transaction rollback doesn't clean it up - each test
+	clears its own key explicitly."""
+
+	def setUp(self):
+		settings = frappe.get_single("HR Chatbot Settings")
+		settings.enable_ai_fallback = 0
+		settings.save()
+		frappe.clear_cache(doctype="HR Chatbot Settings")
+		frappe.cache().delete_value(hr_chatbot._last_intent_cache_key())
+
+	def tearDown(self):
+		frappe.cache().delete_value(hr_chatbot._last_intent_cache_key())
+
+	def test_recall_is_none_with_nothing_remembered(self):
+		self.assertIsNone(hr_chatbot._recall_intent())
+
+	def test_remember_then_recall_round_trip(self):
+		# Regression for a real bug: frappe.cache().get_value() caches a
+		# "not found" None locally in-process unless expires=True is
+		# passed for a key written with expires_in_sec - calling
+		# _recall_intent() (or anything hitting the same key) BEFORE the
+		# value exists must not poison later calls after it's set. See
+		# _recall_intent's docstring.
+		self.assertIsNone(hr_chatbot._recall_intent())
+		hr_chatbot._remember_intent("attendance")
+		entry = hr_chatbot._recall_intent()
+		self.assertIsNotNone(entry)
+		self.assertEqual(entry["key"], "attendance")
+
+	def test_only_followup_capable_intents_are_remembered(self):
+		hr_chatbot._remember_intent("manager")  # not in _FOLLOWUP_CAPABLE_INTENTS
+		self.assertIsNone(hr_chatbot._recall_intent())
+
+	def test_dispatch_remembers_followup_capable_intent(self):
+		with patch.object(hr_chatbot, "_current_employee", return_value=None):
+			hr_chatbot.ask("my attendance this month")
+		entry = hr_chatbot._recall_intent()
+		self.assertIsNotNone(entry)
+		self.assertEqual(entry["key"], "attendance")
+
+	def test_bare_period_followup_routes_to_remembered_intent(self):
+		# entry["handler"] is a direct function reference captured once
+		# when INTENTS was built, not a late lookup by name - patching
+		# hr_chatbot._attendance itself wouldn't be seen by _dispatch, so
+		# the stub is swapped into the INTENTS_BY_KEY entry (the same
+		# dict object INTENTS holds) instead.
+		from unittest.mock import MagicMock
+
+		stub = MagicMock(return_value="ATTENDANCE ANSWER")
+		with patch.object(hr_chatbot, "_current_employee", return_value="some-employee"):
+			with patch.dict(hr_chatbot.INTENTS_BY_KEY["attendance"], {"handler": stub}):
+				hr_chatbot.ask("my attendance this month")
+				reply = hr_chatbot.ask("what about last month")
+
+		self.assertEqual(reply["reply"], "ATTENDANCE ANSWER")
+		# Called twice: once for the original message, once for the bare
+		# follow-up - and the follow-up's raw message text (not the
+		# original) is what gets passed through, so the handler's own
+		# _extract_period(message) call re-parses "last month" itself.
+		self.assertEqual(stub.call_count, 2)
+		self.assertEqual(stub.call_args_list[1].args[1], "what about last month")
+
+	def test_cold_followup_with_nothing_remembered_is_not_hijacked(self):
+		# No prior dispatch in this test - "what about last month" names
+		# a period but has no HR keywords of its own, so with nothing
+		# remembered it must fall through to the off-topic gate, not
+		# error or hang on a missing intent.
+		reply = hr_chatbot.ask("what about last month")
+		self.assertEqual(reply["reply"], hr_chatbot._off_topic())
+
+	def test_unrelated_new_question_is_not_hijacked_by_memory(self):
+		# A message that matches its own intent must win outright,
+		# regardless of what's remembered from the previous turn.
+		with patch.object(hr_chatbot, "_current_employee", return_value="some-employee"):
+			with patch.dict(hr_chatbot.INTENTS_BY_KEY["attendance"], {"handler": lambda *a: "ATTENDANCE ANSWER"}):
+				hr_chatbot.ask("my attendance this month")
+			with patch.dict(hr_chatbot.INTENTS_BY_KEY["manager"], {"handler": lambda *a: "MANAGER ANSWER"}):
+				reply = hr_chatbot.ask("who is my manager")
+		self.assertEqual(reply["reply"], "MANAGER ANSWER")
