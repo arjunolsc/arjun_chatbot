@@ -121,6 +121,22 @@ class TestHRChatbotRouting(FrappeTestCase):
 		self.assertEqual(_route("my date of birth"), "my_profile")
 		self.assertEqual(_route("what's my dob"), "my_profile")
 
+	def test_hr_contacts_routes_correctly_and_not_to_manager(self):
+		# "who is the HR Manager" contains "manager" and must not be
+		# caught by the reporting-manager intent, which is checked right
+		# after this one and would otherwise win on that bare substring.
+		self.assertEqual(_route("my hr name"), "hr_contacts")
+		self.assertEqual(_route("who is the hr manager"), "hr_contacts")
+		self.assertEqual(_route("who is my manager"), "manager")
+
+	def test_company_info_routes_correctly(self):
+		# Real live message: "Om Logistics owener?" - a typo of "owner",
+		# with no other trigger phrase present. Must reach company_info,
+		# not the off-topic redirect.
+		self.assertEqual(_route("Om Logistics owener?"), "company_info")
+		self.assertEqual(_route("who owns om logistics"), "company_info")
+		self.assertEqual(_route("who founded the company"), "company_info")
+
 	# ---- off-topic gate ----
 
 	def test_off_topic_chit_chat_is_redirected(self):

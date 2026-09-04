@@ -287,6 +287,8 @@ _INTENT_DESCRIPTIONS = {
 	"personal_details": "marital status, blood group, or health insurance on file",
 	"holiday": "the next upcoming holiday",
 	"manager": "who the employee reports to",
+	"hr_contacts": "who holds an HR role at the employee's own company",
+	"company_info": "public facts about OM Logistics/OM Group - founder, headquarters, scale, services (not HRMS data)",
 }
 
 
@@ -835,6 +837,33 @@ def _manager(employee, message=None):
 		return _("You don't have a reporting manager set in the system.")
 	manager_name = frappe.db.get_value("Employee", reports_to, "employee_name")
 	return _("Your reporting manager is {0}.").format(manager_name)
+
+
+def _hr_contacts(employee, message=None):
+	# "who is my HR" has no dedicated field anywhere to answer from - the
+	# real, derivable answer is "who holds an HR role at my company",
+	# scoped to the asking employee's own company (not every HR person
+	# across the whole group) via their linked Employee record, not a
+	# hardcoded name.
+	company = frappe.db.get_value("Employee", employee, "company")
+	rows = frappe.db.sql(
+		"""select distinct e.employee_name, e.designation
+		from `tabHas Role` hr
+		join `tabEmployee` e on e.user_id = hr.parent
+		where hr.role in ('HR Manager', 'HR User')
+		and hr.parenttype = 'User'
+		and e.company = %(company)s
+		and e.status = 'Active'
+		order by e.employee_name""",
+		{"company": company},
+		as_dict=True,
+	)
+	if not rows:
+		return _("I couldn't find anyone with an HR role linked to your company. Please check with your admin.")
+	lines = [
+		"{0}{1}".format(r.employee_name, " ({0})".format(r.designation) if r.designation else "") for r in rows
+	]
+	return _("HR contacts for your company:") + "<br>" + "<br>".join(lines)
 
 
 def _notice_period(employee, message=None):
@@ -1399,6 +1428,31 @@ def _onboarding_docs():
 	)
 
 
+# Public facts about OM Logistics/OM Group, not anything from this
+# system's own records - the Company doctype in this instance has these
+# fields (website, phone, email, description) but they're empty, so
+# there's no live internal source to read this from. Sourced from the
+# company's own public pages (omlogistics.co.in/about-us/ and
+# omgroup.co.in/who-we-are.html) and cross-checked between the two -
+# this is marketing-page-accurate, not guaranteed current officially
+# filed detail. Say so in the reply itself so it's never mistaken for
+# an HRMS record the way every other answer in this file is.
+def _company_info(message=None):
+	return _(
+		"Some public facts about OM Logistics / OM Group (from the company's own website, not an HRMS record):<br>"
+		"- Founded by Ajay Singhal, starting with a single truck in 1982; OM Logistics Limited was incorporated "
+		"as a public limited company on 12 October 1999.<br>"
+		"- Headquarters: 130, Transport Centre, Ring Road, Punjabi Bagh, New Delhi - 110035.<br>"
+		"- OM Group spans several companies (OM Logistics, OM Trans Logistics, OM Telecom Logistics, OM Trax "
+		"Packaging Solutions, and others), with 600+ branches across 2,500+ locations, delivering to 19,000+ "
+		"pin codes in India, and a presence in 85+ countries.<br>"
+		"- Around 10,000+ employees group-wide, with 20+ million sq. ft. of warehousing space.<br>"
+		"- Services: 3PL, FTL/PTL express trucking, air and rail cargo, warehousing, and retail express - "
+		"serving automotive, retail, IT, healthcare, FMCG, publishing, and project logistics.<br>"
+		"For anything official (registrations, filings, current leadership), check omlogistics.co.in directly."
+	)
+
+
 def _greeting():
 	return _(
 		"Hi! I can look up your leave balance, attendance, payslip, holidays "
@@ -1697,7 +1751,40 @@ INTENTS = [
 	_entry("passport_details", r"passport", _passport_details, True, ["passport"]),
 	_entry("personal_details", r"marital status|blood group|health insurance|health details|am i married", _personal_details, True, ["marital", "blood"]),
 	_entry("holiday", r"holiday", _next_holiday, True, ["holiday", "holidays"]),
+	# Checked before "manager" below - "who is the HR Manager" contains
+	# "manager" and would otherwise hit the reporting-manager intent
+	# first. Not in the fuzzy keyword list at all - "hr" and "manager"
+	# are both too generic on their own (shared with statutory_ids'
+	# "hr"-adjacent context and the reporting-manager intent
+	# respectively) to trust as standalone typo-tolerant signals; this
+	# one is regex-only; see also _company_info below for the same
+	# reasoning.
+	_entry(
+		"hr_contacts",
+		r"\bmy hr\b|hr (name|contact|person|team|manager|department)|who is (my |the )?hr\b",
+		_hr_contacts,
+		True,
+	),
 	_entry("manager", r"manager|report(s|ing)? ?to", _manager, True, ["manager", "reports", "reporting"]),
+	# Public company facts (see _company_info's own docstring/comment for
+	# sourcing) - not employee data, so needs_employee=False. Checked
+	# before the generic "help|what can you" catch-all below and after
+	# every employee-data intent, so a genuine HR question never gets
+	# mistaken for a company-trivia one.
+	_entry(
+		"company_info",
+		r"\bwho owns\b|\bowner\b|company (info|information|details|profile|overview)|about (om|the company)|"
+		r"\bfounder\b|founded (om|the company)|when was.*(founded|established|incorporated)|"
+		r"head ?office|headquarters?\b|om (logistics|group) (owner|founder)",
+		_company_info,
+		False,
+		# Real live message that started this: "Om Logistics owener?" -
+		# "owener" is a typo of "owner", with no other trigger phrase
+		# ("who owns") present at all. "owner"/"founder" are safe
+		# standalone fuzzy keywords - unique to this one intent, unlike
+		# "manager"/"hr" which are deliberately excluded above.
+		["owner", "founder", "headquarters"],
+	),
 	_entry(None, r"help|what can you|commands", _help, False),
 ]
 
