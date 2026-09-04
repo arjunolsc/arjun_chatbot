@@ -104,6 +104,23 @@ class TestHRChatbotRouting(FrappeTestCase):
 	def test_typo_tolerant_leave_balance(self):
 		self.assertEqual(_route("how mnay leaves left"), "leave_balance")
 
+	def test_salary_increase_question_does_not_return_payslip_data(self):
+		# Real bug caught by live testing: "how can my salary be increase?"
+		# (a career/policy question this app has no answer for) matched
+		# the bare "my salary" pattern and confidently returned real
+		# payslip data - wrong, not just unhelpful. Fixed at both layers:
+		# the payslip regex's negative lookahead, and sharing the fuzzy
+		# keyword "salary" with salary_breakup so a lone typo'd mention
+		# no longer auto-resolves either. Genuine salary questions (with
+		# or without a typo) must still work.
+		self.assertNotEqual(_route("how can my salary be increase?"), "payslip")
+		self.assertEqual(_route("what's my salary"), "payslip")
+		self.assertEqual(_route("sallary slip please"), "payslip")
+
+	def test_date_of_birth(self):
+		self.assertEqual(_route("my date of birth"), "my_profile")
+		self.assertEqual(_route("what's my dob"), "my_profile")
+
 	# ---- off-topic gate ----
 
 	def test_off_topic_chit_chat_is_redirected(self):
@@ -325,3 +342,18 @@ class TestFollowUpMemory(FrappeTestCase):
 			with patch.dict(hr_chatbot.INTENTS_BY_KEY["manager"], {"handler": lambda *a: "MANAGER ANSWER"}):
 				reply = hr_chatbot.ask("who is my manager")
 		self.assertEqual(reply["reply"], "MANAGER ANSWER")
+
+	def test_period_naming_question_about_a_different_topic_is_not_hijacked(self):
+		# Real bug caught by live testing: "on which date I take leave in
+		# august" was hijacked into an attendance answer purely because
+		# "attendance" was the remembered intent and "august" is a period
+		# - even though the message plainly says "leave" and never
+		# mentions attendance. A message naming a period is only deferred
+		# to memory when it has NO competing signal of its own; here
+		# "leave" (however weak/unconfident alone) points at a different
+		# intent than the remembered one, so memory must be refused.
+		with patch.object(hr_chatbot, "_current_employee", return_value="some-employee"):
+			with patch.dict(hr_chatbot.INTENTS_BY_KEY["attendance"], {"handler": lambda *a: "ATTENDANCE ANSWER"}):
+				hr_chatbot.ask("my attendance this month")
+			reply = hr_chatbot.ask("on which date I take leave in august")
+		self.assertNotEqual(reply["reply"], "ATTENDANCE ANSWER")

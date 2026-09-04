@@ -410,6 +410,11 @@ def ask(message: str) -> dict:
 	if fuzzy_entry:
 		return _dispatch(fuzzy_entry, message)
 
+	# One scoring pass, reused below by the follow-up check, the topic
+	# gate, the unanswered-question log, and the near-miss suggestion -
+	# not recomputed by each.
+	best_entry, best_score, best_word_count, best_min_ratio = _fuzzy_score(message)
+
 	# One-step follow-up memory: a bare "what about last month?" right
 	# after asking about attendance/leave/payslip names a period but no
 	# intent of its own, and would otherwise fall straight through to the
@@ -420,14 +425,20 @@ def ask(message: str) -> dict:
 	# _FOLLOWUP_CAPABLE_INTENTS/_recall_intent. A message that already
 	# matched something above never reaches here, so this never overrides
 	# a real, self-sufficient match.
+	#
+	# Real bug caught by live testing: "on which date I take leave in
+	# august" was hijacked into an attendance answer purely because
+	# "attendance" was the remembered intent and "august" is a period -
+	# even though the message plainly says "leave" and never mentions
+	# attendance at all. The guard below refuses the memory whenever the
+	# message's own (even weak/unconfident) best fuzzy match points at a
+	# *different* intent than the one remembered - a competing signal,
+	# however faint, beats stale context. Only a message with no signal
+	# of its own (best_entry is None) defers to memory.
 	if _extract_period(message) or _extract_day(message):
 		followup_entry = _recall_intent()
-		if followup_entry:
+		if followup_entry and (best_entry is None or best_entry["key"] == followup_entry["key"]):
 			return _dispatch(followup_entry, message)
-
-	# One scoring pass, reused below by the topic gate, the unanswered-
-	# question log, and the near-miss suggestion - not recomputed by each.
-	best_entry, best_score, best_word_count, best_min_ratio = _fuzzy_score(message)
 
 	# Off-topic messages ("what's the capital of France") never reach the
 	# AI-classify call or the unanswered-question log below - see
@@ -891,6 +902,7 @@ _PROFILE_FIELDS = [
 	(r"date of joining|when.*join", "date_of_joining"),
 	(r"date of appointment", "custom_date_of_appointment"),
 	(r"retire", "date_of_retirement"),
+	(r"date of birth|\bdob\b|when.*(i was )?born|\bbirthday\b", "date_of_birth"),
 	(r"\bstatus\b|am i active", "status"),
 ]
 _PROFILE_LABELS = {
@@ -904,9 +916,10 @@ _PROFILE_LABELS = {
 	"date_of_joining": _("Date of Joining"),
 	"custom_date_of_appointment": _("Date of Appointment"),
 	"date_of_retirement": _("Date of Retirement"),
+	"date_of_birth": _("Date of Birth"),
 	"status": _("Employment Status"),
 }
-_PROFILE_DATE_FIELDS = ("date_of_joining", "custom_date_of_appointment", "date_of_retirement")
+_PROFILE_DATE_FIELDS = ("date_of_joining", "custom_date_of_appointment", "date_of_retirement", "date_of_birth")
 
 
 def _my_profile(employee, message=None):
@@ -1614,11 +1627,30 @@ INTENTS = [
 		r"\bctc\b|gross salary|net salary|take.?home|total (deduct|allow|benefit)|tankhwah (kitni|breakup|kitna)",
 		_salary_breakup,
 		True,
-		["ctc", "tankhwah"],
+		# "salary" listed here too (not just payslip's list below) is the
+		# fuzzy-layer half of the same fix as the payslip regex's negative
+		# lookahead just below: as a bare keyword unique to one intent, a
+		# single typo'd "salary" alone scored full confidence and
+		# misrouted "how can my salary be increase?" straight to payslip
+		# data - a wrong answer, not just an unhelpful one. Sharing it
+		# across two intents dilutes the weight below the single-word
+		# accept threshold, the same deliberate tradeoff already made for
+		# "leave" across four intents - a lone ambiguous word no longer
+		# auto-resolves via typo-tolerance; the regex above still handles
+		# every correctly-spelled real request.
+		["ctc", "tankhwah", "salary"],
 	),
+	# Real bug caught by live testing: bare "my salary"/"meri salary" is
+	# too broad on its own - "how can my salary be increase?" (a career/
+	# policy question this app has no answer for) matched it and
+	# confidently returned payslip data, which is actively wrong rather
+	# than just unhelpful. The negative lookahead excludes "my/meri
+	# salary" when a raise/hike/increment/promotion word appears anywhere
+	# later in the message - "pay slip"/"salary slip" (unambiguous doc
+	# requests) are unaffected since they don't go through that branch.
 	_entry(
 		"payslip",
-		r"pay ?slip|salary slip|my salary|meri salary|meri tankhwah",
+		r"pay ?slip|salary slip|(my|meri) (salary|tankhwah)(?!.*\b(increase|increas\w*|hike|raise|rais\w*|increment|promotion|appraisal)\b)",
 		_payslip,
 		True,
 		["payslip", "salary", "tankhwah", "slip"],
@@ -1654,7 +1686,8 @@ INTENTS = [
 	_entry("statutory_ids", r"\bpan\b|\buan\b|aadhaar|provident fund account|\bpf number\b|\besic\b", _statutory_ids, True, ["pan", "uan", "aadhaar", "esic"]),
 	_entry(
 		"my_profile",
-		r"my (profile|designation|department|branch|(full )?name|employee (id|number|code))|which department|what.*my (designation|name)|date of appointment|when.*i retire|am i active",
+		r"my (profile|designation|department|branch|(full )?name|employee (id|number|code))|which department|what.*my (designation|name)|date of appointment|when.*i retire|am i active"
+		r"|date of birth|\bdob\b|when.*(i was )?born|\bbirthday\b",
 		_my_profile,
 		True,
 		["designation", "department", "branch", "profile"],
