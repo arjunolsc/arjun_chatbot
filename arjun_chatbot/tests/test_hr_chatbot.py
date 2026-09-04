@@ -90,6 +90,17 @@ class TestHRChatbotRouting(FrappeTestCase):
 	def test_typo_tolerant_attendance(self):
 		self.assertEqual(_route("atendance this month"), "attendance")
 
+	def test_attendece_and_attendence_misspellings(self):
+		# Real production case: "attendece on 29 June" scored only ~0.84
+		# fuzzy similarity to "attendance" - below the single-word
+		# confidence guard (0.90) - so it fell through to the generic
+		# fallback instead of answering. Fixed by listing these specific,
+		# real misspellings as their own keywords/regex alternatives
+		# rather than loosening the guard (which would reopen the
+		# president/present false positive it exists to block).
+		self.assertEqual(_route("attendece on 29 June"), "attendance")
+		self.assertEqual(_route("what is my attendence status today"), "attendance")
+
 	def test_typo_tolerant_leave_balance(self):
 		self.assertEqual(_route("how mnay leaves left"), "leave_balance")
 

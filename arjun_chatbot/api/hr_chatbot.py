@@ -1575,12 +1575,23 @@ INTENTS = [
 	# "hazri"/"hajri" (both spellings seen in real usage) is the everyday
 	# Hinglish word for attendance - fairly unambiguous on its own, unlike
 	# "chutti" above, so it's a safe standalone keyword.
+	#
+	# "attendece"/"attendence" are real misspellings seen in production
+	# usage ("attendece on 29 June") that the plain fuzzy matcher rejected:
+	# both score only ~0.84-0.95 similarity against "attendance", and a
+	# match resting on just one word needs >=0.90 to be trusted (see
+	# _FUZZY_SINGLE_MATCH_CUTOFF) - the same guard that blocks "president"
+	# from misfiring as "present". Lowering that guard would reopen that
+	# exact bug, so instead these specific, real, common misspellings are
+	# listed as their own keywords - each one is then an exact match
+	# against itself (ratio 1.0), clearing the guard without loosening it
+	# for anything else.
 	_entry(
 		"attendance",
-		r"attendance|present|absent|\bhazri\b|\bhajri\b",
+		r"attendance|present|absent|\bhazri\b|\bhajri\b|attendece|attendence",
 		_attendance,
 		True,
-		["attendance", "present", "absent", "hazri", "hajri"],
+		["attendance", "present", "absent", "hazri", "hajri", "attendece", "attendence"],
 	),
 	# Checked before payslip - "my salary account" (a real, common Indian
 	# usage meaning "which bank account my salary goes to") would otherwise
