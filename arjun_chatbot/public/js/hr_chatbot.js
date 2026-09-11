@@ -147,8 +147,15 @@
 		try {
 			var saved = JSON.parse(localStorage.getItem(POSITION_KEY) || "null");
 			if (saved && saved.left && saved.top) {
-				toggle.style.left = saved.left;
-				toggle.style.top = saved.top;
+				// Clamp to the CURRENT viewport, same bounds as the drag handler -
+				// a position saved on a wider/taller window (or before a zoom
+				// change) would otherwise be replayed as-is and can land the
+				// whole 58px icon off-screen, making it look like it "isn't
+				// showing" when it's really just parked outside the visible area.
+				var left = Math.max(4, Math.min(window.innerWidth - toggle.offsetWidth - 4, parseFloat(saved.left)));
+				var top = Math.max(4, Math.min(window.innerHeight - toggle.offsetHeight - 4, parseFloat(saved.top)));
+				toggle.style.left = left + "px";
+				toggle.style.top = top + "px";
 				toggle.style.right = "auto";
 				toggle.style.bottom = "auto";
 			}
