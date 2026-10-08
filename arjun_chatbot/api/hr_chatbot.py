@@ -1,18 +1,20 @@
 # arjun_chatbot/api/hr_chatbot.py
 #
-# A query-resolver for the HRMS desk. Three layers, tried in order, cheapest
-# and most exact first:
-#   1. exact keyword/regex intents;
-#   2. typo-tolerant fuzzy matching (difflib, still fully local/free);
-#   3. an OPTIONAL AI fallback (Groq's free API - see HR Chatbot Settings),
-#      used only when 1 and 2 both come up empty, and only to classify
-#      *which* of the same fixed intents below the message maps to. It
-#      never sees any employee/HR data and never writes the final answer
-#      itself - it gets nothing but the question text, and returns nothing
-#      but an intent name. The actual lookup and reply are always written
-#      by this file's own code, same as layers 1 and 2. Off by default;
-#      nothing is sent anywhere unless HR Chatbot Settings has it enabled
-#      with an API key configured.
+# A query-resolver for the HRMS desk. ask() tries two paths, in order:
+#   0. an OPTIONAL AI-first path (ai_query.py, off by default - see HR
+#      Chatbot Settings): the LLM picks generic, read-only tool calls
+#      (query/aggregate over an allow-listed set of HR doctypes) and the
+#      server, not the model, force-scopes every one of them to the
+#      logged-in user's own Employee record. Used whenever it's enabled,
+#      configured, and doesn't fail/time out.
+#   1+. otherwise (or if 0 returns nothing), the original fixed-intent
+#      pipeline below - three layers, cheapest and most exact first:
+#      1. exact keyword/regex intents;
+#      2. typo-tolerant fuzzy matching (difflib, still fully local/free);
+#      3. an OPTIONAL secondary AI fallback (same Groq config), used only
+#         when 1 and 2 both come up empty, and only to classify *which* of
+#         the same fixed intents below the message maps to - it never sees
+#         employee/HR data and never writes the final answer itself here.
 #
 # Two kinds of answers, whichever layer picked the intent:
 #   - data lookups, scoped to the logged-in user's own linked Employee
@@ -400,9 +402,39 @@ def _suggest_reply(entry):
 
 @frappe.whitelist()
 def ask(message: str) -> dict:
+	"""Thin wrapper around _resolve(): resets the per-request reveal-token
+	registry (see _mask_tail/_augment_masked_reveals below) and, whichever
+	path _resolve took (AI tool-calling or the fixed-intent pipeline),
+	augments any masked statutory/bank/passport value in the final reply
+	with a click-to-reveal button before it goes out - one place, so every
+	reply path gets it uniformly rather than repeating this at each return
+	site inside _resolve."""
+	frappe.local.hrbot_reveal_candidates = {}
+	result = _resolve(message)
+	result["reply"] = _augment_masked_reveals(result.get("reply"))
+	return result
+
+
+def _resolve(message: str) -> dict:
 	message = (message or "").strip()
 	if not message:
 		return {"reply": _help()}
+
+	# AI-first path: when HR Chatbot Settings has the AI fallback enabled
+	# and configured, let the LLM answer via generic, employee-scoped
+	# tool calls (see ai_query.py - the server, not the model, enforces
+	# that every query is pinned to the logged-in user's own Employee
+	# record). Returns None on any failure/timeout/disabled config, in
+	# which case everything below - the exact same fixed-intent pipeline
+	# as before - runs unchanged as the fallback.
+	try:
+		from arjun_chatbot.api import ai_query
+
+		ai_reply = ai_query.answer(message)
+		if ai_reply:
+			return {"reply": ai_reply}
+	except Exception:
+		frappe.log_error(title="HR chatbot AI query path failed")
 
 	for entry in INTENTS:
 		if entry["pattern"].search(message):
@@ -794,17 +826,22 @@ def _payslip(employee, message=None):
 		return _("No payslip has been generated for you yet.")
 
 	r = rows[0]
-	# Salary Slip names can legally contain "/" (seen for real in this
-	# system's own test data) - building the link from the raw name
-	# without encoding it produces a broken URL (the "/" gets read as
-	# extra path segments instead of part of the docname). Caught by
-	# systematic testing, not something the earlier ad-hoc checks hit.
-	slip_url = "/app/salary-slip/" + quote(r.name, safe="")
+	# A PDF (via Frappe's own print/download_pdf endpoint, using Salary
+	# Slip's configured default print format - this HRMS's actual branded
+	# payslip layout) rather than a desk-app page link: it opens straight
+	# to the finished payslip, no further clicking around the app needed,
+	# and works the same on mobile. Salary Slip names can legally contain
+	# "/" (seen for real in this system's own test data) - building the
+	# link from the raw name without encoding it produces a broken URL
+	# (the "/" gets read as extra query characters instead of part of the
+	# docname). Caught by systematic testing, not something the earlier
+	# ad-hoc checks hit.
+	slip_url = "/api/method/frappe.utils.print_format.download_pdf?doctype=Salary%20Slip&name=" + quote(r.name, safe="")
 	if period:
-		return _("Your payslip for {0} ({1} to {2}): net pay {3}, status {4}. <a href='{5}'>View it here</a>.").format(
+		return _("Your payslip for {0} ({1} to {2}): net pay {3}, status {4}. <a href='{5}'>Download PDF</a>.").format(
 			label, formatdate(r.start_date), formatdate(r.end_date), fmt_money(r.net_pay), r.status, slip_url
 		)
-	return _("Your latest payslip ({0} to {1}): net pay {2}, status {3}. <a href='{4}'>View it here</a>.").format(
+	return _("Your latest payslip ({0} to {1}): net pay {2}, status {3}. <a href='{4}'>Download PDF</a>.").format(
 		formatdate(r.start_date), formatdate(r.end_date), fmt_money(r.net_pay), r.status, slip_url
 	)
 
@@ -895,13 +932,71 @@ def _mask_tail(value, keep=4):
 	though this is the employee's own data, a chat transcript is exactly
 	the kind of place a full PAN/UAN/bank account number shouldn't sit in
 	plaintext (screenshots, synced chat history, shared devices) - the
-	full number stays visible to HR in the actual Employee record."""
+	full number stays visible to HR in the actual Employee record.
+
+	Also records (masked -> real value) for this request in
+	frappe.local.hrbot_reveal_candidates (reset per-request by ask()), so
+	_augment_masked_reveals can turn the masked substring in the final
+	reply into a click-to-reveal button after the fact - kept as a
+	side-effect here rather than a second call site, since every masked
+	value in a reply (fixed-intent or AI tool-result JSON alike) already
+	passes through this one function."""
 	value = str(value or "").strip()
 	if not value:
 		return None
 	if len(value) <= keep:
 		return value
-	return "*" * (len(value) - keep) + value[-keep:]
+	masked = "*" * (len(value) - keep) + value[-keep:]
+	_record_reveal_candidate(masked, value)
+	return masked
+
+
+def _record_reveal_candidate(masked, real_value):
+	store = getattr(frappe.local, "hrbot_reveal_candidates", None)
+	if store is None:
+		store = frappe.local.hrbot_reveal_candidates = {}
+	store[masked] = real_value
+
+
+def _augment_masked_reveals(reply):
+	"""Turn every masked value that made it into the final reply text (see
+	_record_reveal_candidate) into a <span> + a click-to-reveal button, each
+	wired to a short-lived, per-user, per-token cache entry holding the real
+	value - the full value is never sent to the browser until that specific
+	button is clicked, matching a password field's show/hide pattern rather
+	than shipping the real value in the page and just hiding it with CSS.
+	Best-effort for the AI path: relies on the masked substring appearing
+	verbatim in the model's own final wording, which short alphanumeric
+	tokens like this reliably do in practice - if it doesn't, the reply is
+	unaffected, just without a reveal button."""
+	store = getattr(frappe.local, "hrbot_reveal_candidates", None)
+	if not store or not reply:
+		return reply
+	for masked, real_value in store.items():
+		if not masked or masked not in reply:
+			continue
+		token = frappe.generate_hash(length=12)
+		frappe.cache().set_value(f"hrbot_reveal:{frappe.session.user}:{token}", real_value, expires_in_sec=300)
+		button = f'<button type="button" class="hrbot-reveal-btn" data-token="{token}" title="Show">👁</button>'
+		reply = reply.replace(masked, '<span class="hrbot-masked-value">' + masked + "</span>" + button)
+	return reply
+
+
+@frappe.whitelist()
+def reveal_masked(token: str) -> dict:
+	"""Redeem a short-lived reveal token minted by _augment_masked_reveals
+	for the real value behind one masked field shown in a chat reply.
+	Scoped to the exact frappe.session.user it was minted for (baked into
+	the cache key, not a client-supplied field) - a token can only ever be
+	redeemed by the same live, authenticated session that asked the
+	original question, not replayed by anyone who merely sees the button
+	(e.g. in a screenshot or synced chat history)."""
+	if not token:
+		frappe.throw(_("Missing token"))
+	value = frappe.cache().get_value(f"hrbot_reveal:{frappe.session.user}:{token}", expires=True)
+	if value is None:
+		return {"value": None, "error": _("This has expired - please ask again to see it.")}
+	return {"value": value}
 
 
 def _pick_field(message, mapping):

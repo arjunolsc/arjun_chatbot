@@ -9,7 +9,15 @@
   "groq_api_key",
   "groq_model",
   "column_break_1",
-  "help_text"
+  "help_text",
+  "whatsapp_section",
+  "enable_whatsapp",
+  "whatsapp_phone_number_id",
+  "whatsapp_access_token",
+  "column_break_whatsapp",
+  "whatsapp_verify_token",
+  "whatsapp_app_secret",
+  "whatsapp_help_text"
  ],
  "fields": [
   {
@@ -49,6 +57,56 @@
    "fieldname": "help_text",
    "fieldtype": "HTML",
    "options": "<p class='text-muted' style='font-size: 12px;'>Actual live limit for this key, read from Groq's own response headers: 1,000 requests / 8,000 tokens per rate-limit window. Plenty for internal HR chatbot use - this is only called for questions the free local matching can't already resolve.</p>"
+  },
+  {
+   "fieldname": "whatsapp_section",
+   "fieldtype": "Section Break",
+   "label": "WhatsApp (Meta Cloud API)"
+  },
+  {
+   "default": "0",
+   "description": "Lets employees message ALIA on WhatsApp. Identity is verified by matching the sender's WhatsApp number against Employee.cell_number on file - no OTP step. Uses the same ask() pipeline as the desk widget (same AI/fixed-intent logic, same employee scoping), just a different channel in and out.",
+   "fieldname": "enable_whatsapp",
+   "fieldtype": "Check",
+   "label": "Enable WhatsApp Channel"
+  },
+  {
+   "depends_on": "enable_whatsapp",
+   "description": "From Meta's WhatsApp → API Setup page (developers.facebook.com), under your test number.",
+   "fieldname": "whatsapp_phone_number_id",
+   "fieldtype": "Data",
+   "label": "WhatsApp Phone Number ID"
+  },
+  {
+   "depends_on": "enable_whatsapp",
+   "description": "Temporary or permanent access token from the same API Setup page. Stored encrypted.",
+   "fieldname": "whatsapp_access_token",
+   "fieldtype": "Password",
+   "label": "WhatsApp Access Token"
+  },
+  {
+   "fieldname": "column_break_whatsapp",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "enable_whatsapp",
+   "description": "A secret string you make up and enter here AND in Meta's webhook configuration (Verify Token field) - used only for the one-time webhook handshake.",
+   "fieldname": "whatsapp_verify_token",
+   "fieldtype": "Data",
+   "label": "Webhook Verify Token"
+  },
+  {
+   "depends_on": "enable_whatsapp",
+   "description": "From your Meta app's Basic Settings → App Secret. Used to verify every incoming webhook call really came from Meta (X-Hub-Signature-256), not to authenticate outgoing calls. Stored encrypted.",
+   "fieldname": "whatsapp_app_secret",
+   "fieldtype": "Password",
+   "label": "App Secret"
+  },
+  {
+   "depends_on": "enable_whatsapp",
+   "fieldname": "whatsapp_help_text",
+   "fieldtype": "HTML",
+   "options": "<p class='text-muted' style='font-size: 12px;'>Webhook URL to give Meta: this site's URL + <code>/api/method/arjun_chatbot.api.whatsapp.webhook</code>. In test mode, only WhatsApp numbers added as \"recipient numbers\" in Meta's dashboard can message this bot - up to 5, no business verification needed yet.</p>"
   }
  ],
  "issingle": 1,

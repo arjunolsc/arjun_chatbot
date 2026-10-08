@@ -244,6 +244,31 @@
 	color: var(--alia-purple);
 	font-weight: 600;
 }
+.hrbot-masked-value {
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.02em;
+}
+.hrbot-reveal-btn {
+	background: transparent;
+	border: none;
+	padding: 0 2px;
+	margin-left: 2px;
+	font-size: 12px;
+	line-height: 1;
+	cursor: pointer;
+	vertical-align: middle;
+	opacity: 0.65;
+	transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.hrbot-reveal-btn:hover {
+	opacity: 1;
+	transform: scale(1.1);
+}
+.hrbot-reveal-btn:disabled {
+	opacity: 0.35;
+	cursor: default;
+	transform: none;
+}
 
 .hrbot-typing {
 	display: flex;
