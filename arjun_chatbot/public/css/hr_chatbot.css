@@ -43,8 +43,28 @@
 	z-index: 4000;
 	user-select: none;
 	touch-action: none;
-	animation: aliaGlow 3s ease-in-out infinite;
 	transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+/* The pink pulse is drawn once on its own layer and only its opacity is
+   animated - the GPU handles that. Animating box-shadow itself (as before)
+   forced a style recalc + repaint every frame on every desk page: ~60
+   recalcs/s and ~60ms of main-thread work per second while idle. */
+#hrbot-toggle::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: 50%;
+	box-shadow: 0 6px 28px rgba(244, 114, 182, 0.6);
+	opacity: 0;
+	pointer-events: none;
+	z-index: -1;
+	will-change: opacity;
+	animation: aliaGlow 3s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	#hrbot-toggle::after {
+		animation: none;
+	}
 }
 #hrbot-toggle:hover {
 	transform: scale(1.08);
@@ -73,8 +93,8 @@
 }
 
 @keyframes aliaGlow {
-	0%, 100% { box-shadow: 0 6px 20px rgba(167, 139, 250, 0.45); }
-	50% { box-shadow: 0 6px 28px rgba(244, 114, 182, 0.6); }
+	0%, 100% { opacity: 0; }
+	50% { opacity: 1; }
 }
 
 #hrbot-panel {
