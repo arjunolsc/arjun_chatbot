@@ -102,6 +102,58 @@
 		if (row) row.remove();
 	}
 
+	// Click-to-reveal for masked statutory/bank/passport values (see
+	// hr_chatbot.py's _augment_masked_reveals/reveal_masked): the bot reply
+	// ships only the masked text plus an opaque token, never the real value
+	// - clicking the eye button fetches it just-in-time and swaps it in, so
+	// a chat transcript/screenshot never has the full number sitting in the
+	// page unless someone deliberately revealed it. One delegated listener
+	// on the messages container handles every reveal button ever rendered,
+	// including ones added by future messages. #hrbot-messages doesn't
+	// exist yet at script-load time (buildWidget() creates it below), so
+	// this is called from there once it does, not at the top level here.
+	function bindRevealHandler() {
+		document.getElementById("hrbot-messages").addEventListener("click", function (e) {
+			var btn = e.target.closest(".hrbot-reveal-btn");
+			if (!btn || btn.disabled) return;
+			var span = btn.previousElementSibling;
+			if (!span || !span.classList.contains("hrbot-masked-value")) return;
+
+			if (btn.dataset.revealed === "1") {
+				span.textContent = btn.dataset.maskedText;
+				btn.dataset.revealed = "0";
+				btn.title = "Show";
+				btn.textContent = "👁";
+				return;
+			}
+
+			btn.disabled = true;
+			frappe.call({
+				method: "arjun_chatbot.api.hr_chatbot.reveal_masked",
+				args: { token: btn.dataset.token },
+				callback: function (r) {
+					btn.disabled = false;
+					if (r.message && r.message.value) {
+						btn.dataset.maskedText = span.textContent;
+						span.textContent = r.message.value;
+						btn.dataset.revealed = "1";
+						btn.title = "Hide";
+						btn.textContent = "🙈";
+					} else {
+						frappe.show_alert({
+							message: (r.message && r.message.error) || "Couldn't reveal that.",
+							indicator: "orange",
+						});
+					}
+				},
+				error: function () {
+					btn.disabled = false;
+					frappe.show_alert({ message: "Couldn't reveal that right now.", indicator: "red" });
+				},
+			});
+		});
+	}
+
 	function ask(message) {
 		addMessage(message, "user");
 		showTyping();
@@ -246,6 +298,7 @@
 			"<button id='hrbot-send' type='button'>" + SEND_ICON_SVG + "</button>" +
 			"</div>";
 		document.body.appendChild(panel);
+		bindRevealHandler();
 
 		restoreTogglePosition(toggle);
 		positionPanel(toggle, panel);
